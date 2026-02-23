@@ -33,6 +33,8 @@
 #include "qemu/module.h"
 #include "qapi/visitor.h"
 
+#include "npu_engine.h"
+
 #define TYPE_PCI_EDU_DEVICE "edu"
 typedef struct EduState EduState;
 DECLARE_INSTANCE_CHECKER(EduState, EDU,
@@ -40,6 +42,7 @@ DECLARE_INSTANCE_CHECKER(EduState, EDU,
 
 #define FACT_IRQ        0x00000001
 #define DMA_IRQ         0x00000100
+#define NPU_ERROR_IRQ   0x00000200
 
 #define DMA_START       0x40000
 #define DMA_SIZE        4096
@@ -75,6 +78,8 @@ struct EduState {
     QEMUTimer dma_timer;
     char dma_buf[DMA_SIZE];
     uint64_t dma_mask;
+
+    npu_engine_t npu_engine;
 };
 
 static bool edu_msi_enabled(EduState *edu)
@@ -170,6 +175,25 @@ static void edu_dma_timer(void *opaque)
     }
 }
 
+/* NPU DMA callbacks - wrap QEMU pci_dma_read/write for npu_engine */
+static int edu_npu_dma_read(void *opaque, uint64_t addr,
+                            void *buf, uint32_t size)
+{
+    EduState *edu = opaque;
+    pci_dma_read(&edu->pdev, edu_clamp_addr(edu, edu->dma.dst + addr),
+                 buf, size);
+    return 0;
+}
+
+static int edu_npu_dma_write(void *opaque, uint64_t addr,
+                             const void *buf, uint32_t size)
+{
+    EduState *edu = opaque;
+    pci_dma_write(&edu->pdev, edu_clamp_addr(edu, edu->dma.dst + addr),
+                  buf, size);
+    return 0;
+}
+
 static void dma_rw(EduState *edu, bool write, dma_addr_t *val, dma_addr_t *dma,
                 bool timer)
 {
@@ -222,8 +246,14 @@ static uint64_t edu_mmio_read(void *opaque, hwaddr addr, unsigned size)
     case 0x80:
         dma_rw(edu, false, &val, &edu->dma.src, false);
         break;
+    case 0x84:
+        val = edu->dma.src >> 32;
+        break;
     case 0x88:
         dma_rw(edu, false, &val, &edu->dma.dst, false);
+        break;
+    case 0x8c:
+        val = edu->dma.dst >> 32;
         break;
     case 0x90:
         dma_rw(edu, false, &val, &edu->dma.cnt, false);
@@ -284,8 +314,20 @@ static void edu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
     case 0x80:
         dma_rw(edu, true, &val, &edu->dma.src, false);
         break;
+    case 0x84:
+        if (!(edu->dma.cmd & EDU_DMA_RUN)) {
+            edu->dma.src = (edu->dma.src & 0xFFFFFFFF) |
+                           ((dma_addr_t)val << 32);
+        }
+        break;
     case 0x88:
         dma_rw(edu, true, &val, &edu->dma.dst, false);
+        break;
+    case 0x8c:
+        if (!(edu->dma.cmd & EDU_DMA_RUN)) {
+            edu->dma.dst = (edu->dma.dst & 0xFFFFFFFF) |
+                           ((dma_addr_t)val << 32);
+        }
         break;
     case 0x90:
         dma_rw(edu, true, &val, &edu->dma.cnt, false);
@@ -294,7 +336,34 @@ static void edu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
         if (!(val & EDU_DMA_RUN)) {
             break;
         }
-        dma_rw(edu, true, &val, &edu->dma.cmd, true);
+        /* NPU engine: fetch program from guest memory and execute */
+        {
+            dma_addr_t src = edu_clamp_addr(edu, edu->dma.src);
+            uint32_t cnt = (uint32_t)edu->dma.cnt;
+            uint8_t *prog = g_malloc(cnt);
+
+            pci_dma_read(&edu->pdev, src, prog, cnt);
+
+            /* Skip 64-byte binary header (npu_bin_header_t) —
+             * instructions start at offset 64 */
+            int npu_rc = -1;
+            if (cnt > NPU_INST_BYTES) {
+                npu_rc = npu_engine_run(&edu->npu_engine,
+                               prog + NPU_INST_BYTES,
+                               cnt - NPU_INST_BYTES,
+                               edu_npu_dma_read, edu_npu_dma_write, edu);
+            }
+            g_free(prog);
+
+            edu->dma.cmd &= ~EDU_DMA_RUN;
+            if (npu_rc == 0) {
+                edu_raise_irq(edu, DMA_IRQ);
+            } else {
+                qemu_log_mask(LOG_GUEST_ERROR,
+                    "EDU NPU: engine_run FAILED (rc=%d)\n", npu_rc);
+                edu_raise_irq(edu, DMA_IRQ | NPU_ERROR_IRQ);
+            }
+        }
         break;
     }
 }
@@ -379,6 +448,8 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
 
     timer_init_ms(&edu->dma_timer, QEMU_CLOCK_VIRTUAL, edu_dma_timer, edu);
 
+    npu_engine_init(&edu->npu_engine);
+
     qemu_mutex_init(&edu->thr_mutex);
     qemu_cond_init(&edu->thr_cond);
     qemu_thread_create(&edu->thread, "edu", edu_fact_thread,
@@ -410,7 +481,7 @@ static void edu_instance_init(Object *obj)
 {
     EduState *edu = EDU(obj);
 
-    edu->dma_mask = (1UL << 28) - 1;
+    edu->dma_mask = UINT64_MAX;
     object_property_add_uint64_ptr(obj, "dma_mask",
                                    &edu->dma_mask, OBJ_PROP_FLAG_READWRITE);
 }
