@@ -27,10 +27,19 @@ for source, dest in json.loads(out).items():
         raise e
     try:
         os.symlink(source, bundle_dest)
-    except BaseException as e:
-        if not isinstance(e, OSError) or e.errno != errno.EEXIST:
-            if os.name == 'nt':
-                print('Please enable Developer Mode to support soft link '
-                      'without Administrator permission')
+    except OSError as e:
+        if e.errno == errno.EEXIST:
+            pass
+        elif os.name == 'nt':
+            # Fallback: copy instead of symlink on Windows without Developer Mode
+            import shutil
+            try:
+                if os.path.isdir(source):
+                    shutil.copytree(source, bundle_dest)
+                else:
+                    shutil.copy2(source, bundle_dest)
+            except Exception:
+                pass
+        else:
             print(f'error making symbolic link {dest}', file=sys.stderr)
             raise e
