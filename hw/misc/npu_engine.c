@@ -571,14 +571,6 @@ static int handle_depthwise_conv(npu_exec_ctx_t *ctx)
                                       inst->stride_h, inst->stride_w, inst->flags);
 }
 
-/* Stub handler for unimplemented operations */
-static int handle_unimplemented(npu_exec_ctx_t *ctx)
-{
-    (void)ctx;  /* Unused - will be used when implemented */
-    /* TODO: implement compute kernel for this operation */
-    return -1;
-}
-
 /* ================================================================== */
 /* Opcode Dispatch Table                                              */
 /* ================================================================== */

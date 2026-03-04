@@ -473,18 +473,21 @@ int npu_compute_softmax(const void* src, void* dst,
                     max_val = val;
             }
 
-            /* Compute exp and sum */
+            /* Two-pass: compute exp+sum, then normalize (use output as temp) */
             float sum = 0.0f;
-            float exp_vals[axis_size];  /* VLA for temporary storage */
             for (i = 0; i < axis_size; i++) {
                 float val = npu_fp16_to_fp32(vec_in[i]);
-                exp_vals[i] = expf(val - max_val);
-                sum += exp_vals[i];
+                float ev = expf(val - max_val);
+                /* Store fp32 exp value temporarily as fp16 in output */
+                vec_out[i] = npu_fp32_to_fp16(ev);
+                sum += ev;
             }
 
             /* Normalize */
-            for (i = 0; i < axis_size; i++)
-                vec_out[i] = npu_fp32_to_fp16(exp_vals[i] / sum);
+            for (i = 0; i < axis_size; i++) {
+                float ev = npu_fp16_to_fp32(vec_out[i]);
+                vec_out[i] = npu_fp32_to_fp16(ev / sum);
+            }
         }
     } else {
         const float *sf = (const float *)src;
