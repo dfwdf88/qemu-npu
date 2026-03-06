@@ -14,6 +14,7 @@
 #include "npu_compute.h"
 
 #include <string.h>
+#include <math.h>
 
 /* ================================================================== */
 /* Instruction Handler Context                                        */
@@ -542,6 +543,378 @@ static int handle_conv2d(npu_exec_ctx_t *ctx)
                               inst->stride_h, inst->stride_w, inst->flags);
 }
 
+static int handle_fmadd(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_fmadd_t *inst = &ctx->inst->fmadd;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    if (!sram_bounds_ok(inst->src_a_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->src_b_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->src_c_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * elem_size))
+        return -1;
+
+    return npu_compute_fmadd(&ctx->engine->sram[inst->src_a_addr],
+                              &ctx->engine->sram[inst->src_b_addr],
+                              &ctx->engine->sram[inst->src_c_addr],
+                              &ctx->engine->sram[inst->dst_addr],
+                              inst->num_elements, inst->flags);
+}
+
+static int handle_clamp(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_clamp_t *inst = &ctx->inst->clamp;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    if (!sram_bounds_ok(inst->src_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * elem_size))
+        return -1;
+
+    float min_val, max_val;
+    memcpy(&min_val, &inst->min_val_fp32, sizeof(float));
+    memcpy(&max_val, &inst->max_val_fp32, sizeof(float));
+
+    return npu_compute_clamp(&ctx->engine->sram[inst->src_addr],
+                              &ctx->engine->sram[inst->dst_addr],
+                              inst->num_elements, min_val, max_val, inst->flags);
+}
+
+static int handle_exp(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_exp_t *inst = &ctx->inst->exp;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    if (!sram_bounds_ok(inst->src_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * elem_size))
+        return -1;
+
+    return npu_compute_exp(&ctx->engine->sram[inst->src_addr],
+                            &ctx->engine->sram[inst->dst_addr],
+                            inst->num_elements, inst->flags);
+}
+
+static int handle_log(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_log_t *inst = &ctx->inst->log;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    if (!sram_bounds_ok(inst->src_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * elem_size))
+        return -1;
+
+    return npu_compute_log(&ctx->engine->sram[inst->src_addr],
+                            &ctx->engine->sram[inst->dst_addr],
+                            inst->num_elements, inst->flags);
+}
+
+static int handle_sqrt(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_sqrt_t *inst = &ctx->inst->sqrt;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    if (!sram_bounds_ok(inst->src_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * elem_size))
+        return -1;
+
+    return npu_compute_sqrt(&ctx->engine->sram[inst->src_addr],
+                             &ctx->engine->sram[inst->dst_addr],
+                             inst->num_elements, inst->flags);
+}
+
+static int handle_rsqrt(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_rsqrt_t *inst = &ctx->inst->rsqrt;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    if (!sram_bounds_ok(inst->src_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * elem_size))
+        return -1;
+
+    return npu_compute_rsqrt(&ctx->engine->sram[inst->src_addr],
+                              &ctx->engine->sram[inst->dst_addr],
+                              inst->num_elements, inst->flags);
+}
+
+static int handle_abs(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_abs_t *inst = &ctx->inst->abs;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    if (!sram_bounds_ok(inst->src_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * elem_size))
+        return -1;
+
+    return npu_compute_abs(&ctx->engine->sram[inst->src_addr],
+                            &ctx->engine->sram[inst->dst_addr],
+                            inst->num_elements, inst->flags);
+}
+
+static int handle_neg(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_neg_t *inst = &ctx->inst->neg;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    if (!sram_bounds_ok(inst->src_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * elem_size))
+        return -1;
+
+    return npu_compute_neg(&ctx->engine->sram[inst->src_addr],
+                            &ctx->engine->sram[inst->dst_addr],
+                            inst->num_elements, inst->flags);
+}
+
+static int handle_gemm(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_gemm_t *inst = &ctx->inst->gemm;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    if (!sram_bounds_ok(inst->src_a_addr, inst->m * inst->k * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->src_b_addr, inst->k * inst->n * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->m * inst->n * elem_size))
+        return -1;
+
+    float alpha, beta;
+    memcpy(&alpha, &inst->alpha_fp32, sizeof(float));
+    memcpy(&beta, &inst->beta_fp32, sizeof(float));
+
+    return npu_compute_gemm(&ctx->engine->sram[inst->src_a_addr],
+                             &ctx->engine->sram[inst->src_b_addr],
+                             &ctx->engine->sram[inst->dst_addr],
+                             inst->m, inst->n, inst->k,
+                             alpha, beta, inst->flags);
+}
+
+static int handle_dot(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_dot_t *inst = &ctx->inst->dot;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    if (!sram_bounds_ok(inst->src_a_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->src_b_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, elem_size))
+        return -1;
+
+    return npu_compute_dot(&ctx->engine->sram[inst->src_a_addr],
+                            &ctx->engine->sram[inst->src_b_addr],
+                            &ctx->engine->sram[inst->dst_addr],
+                            inst->num_elements, inst->flags);
+}
+
+static int handle_swish(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_swish_t *inst = &ctx->inst->swish;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    if (!sram_bounds_ok(inst->src_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * elem_size))
+        return -1;
+
+    return npu_compute_swish(&ctx->engine->sram[inst->src_addr],
+                              &ctx->engine->sram[inst->dst_addr],
+                              inst->num_elements, inst->flags);
+}
+
+static int handle_mish(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_mish_t *inst = &ctx->inst->mish;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    if (!sram_bounds_ok(inst->src_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * elem_size))
+        return -1;
+
+    return npu_compute_mish(&ctx->engine->sram[inst->src_addr],
+                             &ctx->engine->sram[inst->dst_addr],
+                             inst->num_elements, inst->flags);
+}
+
+static int handle_rmsnorm(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_rmsnorm_t *inst = &ctx->inst->rmsnorm;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    int has_weight = (inst->flags & 0x02) != 0;
+
+    uint32_t total_elements = inst->batch_size * inst->normalized_shape;
+    if (!sram_bounds_ok(inst->src_addr, total_elements * elem_size))
+        return -1;
+    if (has_weight && !sram_bounds_ok(inst->weight_addr, inst->normalized_shape * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, total_elements * elem_size))
+        return -1;
+
+    float epsilon;
+    memcpy(&epsilon, &inst->epsilon_fp32, sizeof(float));
+
+    void *weight = has_weight ? &ctx->engine->sram[inst->weight_addr] : NULL;
+
+    return npu_compute_rmsnorm(&ctx->engine->sram[inst->src_addr],
+                                weight,
+                                &ctx->engine->sram[inst->dst_addr],
+                                inst->batch_size, inst->normalized_shape,
+                                epsilon, inst->flags);
+}
+
+static int handle_groupnorm(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_groupnorm_t *inst = &ctx->inst->groupnorm;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    int affine = (inst->flags & 0x02) != 0;
+
+    uint32_t total_elements = inst->num_channels * inst->spatial_size;
+    if (!sram_bounds_ok(inst->src_addr, total_elements * elem_size))
+        return -1;
+    if (affine) {
+        if (!sram_bounds_ok(inst->gamma_addr, inst->num_channels * elem_size))
+            return -1;
+        if (!sram_bounds_ok(inst->beta_addr, inst->num_channels * elem_size))
+            return -1;
+    }
+    if (!sram_bounds_ok(inst->dst_addr, total_elements * elem_size))
+        return -1;
+
+    float epsilon;
+    memcpy(&epsilon, &inst->epsilon_fp32, sizeof(float));
+
+    void *gamma = affine ? &ctx->engine->sram[inst->gamma_addr] : NULL;
+    void *beta = affine ? &ctx->engine->sram[inst->beta_addr] : NULL;
+
+    return npu_compute_groupnorm(&ctx->engine->sram[inst->src_addr],
+                                  gamma, beta,
+                                  &ctx->engine->sram[inst->dst_addr],
+                                  inst->num_groups, inst->num_channels,
+                                  inst->spatial_size, epsilon, inst->flags);
+}
+
+static int handle_instancenorm(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_instancenorm_t *inst = &ctx->inst->instancenorm;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    int affine = (inst->flags & 0x02) != 0;
+
+    uint32_t total_elements = inst->num_channels * inst->spatial_size;
+    if (!sram_bounds_ok(inst->src_addr, total_elements * elem_size))
+        return -1;
+    if (affine) {
+        if (!sram_bounds_ok(inst->gamma_addr, inst->num_channels * elem_size))
+            return -1;
+        if (!sram_bounds_ok(inst->beta_addr, inst->num_channels * elem_size))
+            return -1;
+    }
+    if (!sram_bounds_ok(inst->dst_addr, total_elements * elem_size))
+        return -1;
+
+    float epsilon;
+    memcpy(&epsilon, &inst->epsilon_fp32, sizeof(float));
+
+    void *gamma = affine ? &ctx->engine->sram[inst->gamma_addr] : NULL;
+    void *beta = affine ? &ctx->engine->sram[inst->beta_addr] : NULL;
+
+    return npu_compute_instancenorm(&ctx->engine->sram[inst->src_addr],
+                                     gamma, beta,
+                                     &ctx->engine->sram[inst->dst_addr],
+                                     inst->num_channels, inst->spatial_size,
+                                     epsilon, inst->flags);
+}
+
+static int handle_sdpa(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_scaled_dot_product_attention_t *inst = &ctx->inst->scaled_dot_product_attention;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+
+    uint32_t q_elements = inst->num_heads * inst->seq_len_q * inst->head_dim;
+    uint32_t kv_elements = inst->num_heads * inst->seq_len_kv * inst->head_dim;
+
+    if (!sram_bounds_ok(inst->q_addr, q_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->k_addr, kv_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->v_addr, kv_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, q_elements * elem_size))
+        return -1;
+
+    float scale;
+    memcpy(&scale, &inst->scale_fp32, sizeof(float));
+    if (scale == 0.0f)
+        scale = 1.0f / sqrtf((float)inst->head_dim);
+
+    return npu_compute_sdpa(&ctx->engine->sram[inst->q_addr],
+                             &ctx->engine->sram[inst->k_addr],
+                             &ctx->engine->sram[inst->v_addr],
+                             &ctx->engine->sram[inst->dst_addr],
+                             inst->num_heads, inst->seq_len_q, inst->seq_len_kv,
+                             inst->head_dim, scale, inst->flags);
+}
+
+static int handle_cast(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_cast_t *inst = &ctx->inst->cast;
+    uint32_t src_elem_sizes[] = {4, 2, 1, 4};
+    uint32_t dst_elem_sizes[] = {4, 2, 1, 4};
+
+    if (inst->src_dtype > 3 || inst->dst_dtype > 3)
+        return -1;
+
+    if (!sram_bounds_ok(inst->src_addr, inst->num_elements * src_elem_sizes[inst->src_dtype]))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * dst_elem_sizes[inst->dst_dtype]))
+        return -1;
+
+    return npu_compute_cast(&ctx->engine->sram[inst->src_addr],
+                             &ctx->engine->sram[inst->dst_addr],
+                             inst->num_elements, inst->src_dtype, inst->dst_dtype);
+}
+
+static int handle_quantize(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_quantize_t *inst = &ctx->inst->quantize;
+    int per_channel = (inst->flags & 0x01) != 0;
+    uint32_t num_scale = per_channel ? inst->num_channels : 1;
+
+    if (!sram_bounds_ok(inst->src_addr, inst->num_elements * sizeof(float)))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements))
+        return -1;
+    if (!sram_bounds_ok(inst->scale_addr, num_scale * sizeof(float)))
+        return -1;
+    if (!sram_bounds_ok(inst->zero_point_addr, num_scale))
+        return -1;
+
+    return npu_compute_quantize(&ctx->engine->sram[inst->src_addr],
+                                 &ctx->engine->sram[inst->dst_addr],
+                                 &ctx->engine->sram[inst->scale_addr],
+                                 &ctx->engine->sram[inst->zero_point_addr],
+                                 inst->num_elements, inst->num_channels,
+                                 inst->flags);
+}
+
+static int handle_dequantize(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_dequantize_t *inst = &ctx->inst->dequantize;
+    int per_channel = (inst->flags & 0x01) != 0;
+    uint32_t num_scale = per_channel ? inst->num_channels : 1;
+
+    if (!sram_bounds_ok(inst->src_addr, inst->num_elements))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * sizeof(float)))
+        return -1;
+    if (!sram_bounds_ok(inst->scale_addr, num_scale * sizeof(float)))
+        return -1;
+    if (!sram_bounds_ok(inst->zero_point_addr, num_scale))
+        return -1;
+
+    return npu_compute_dequantize(&ctx->engine->sram[inst->src_addr],
+                                   &ctx->engine->sram[inst->dst_addr],
+                                   &ctx->engine->sram[inst->scale_addr],
+                                   &ctx->engine->sram[inst->zero_point_addr],
+                                   inst->num_elements, inst->num_channels,
+                                   inst->flags);
+}
+
 static int handle_depthwise_conv(npu_exec_ctx_t *ctx)
 {
     const npu_inst_depthwise_conv_t *inst = &ctx->inst->depthwise_conv;
@@ -586,13 +959,23 @@ static npu_handler_fn g_opcode_handlers[256] = {
     [NPU_OP_HALT] = handle_halt,
 
     /* 0x10-0x1F: Arithmetic */
-    [NPU_OP_ADD] = handle_add,
-    [NPU_OP_SUB] = handle_sub,
-    [NPU_OP_MUL] = handle_mul,
-    [NPU_OP_DIV] = handle_div,
+    [NPU_OP_ADD]   = handle_add,
+    [NPU_OP_SUB]   = handle_sub,
+    [NPU_OP_MUL]   = handle_mul,
+    [NPU_OP_DIV]   = handle_div,
+    [NPU_OP_FMADD] = handle_fmadd,
+    [NPU_OP_CLAMP] = handle_clamp,
+    [NPU_OP_EXP]   = handle_exp,
+    [NPU_OP_LOG]   = handle_log,
+    [NPU_OP_SQRT]  = handle_sqrt,
+    [NPU_OP_RSQRT] = handle_rsqrt,
+    [NPU_OP_ABS]   = handle_abs,
+    [NPU_OP_NEG]   = handle_neg,
 
     /* 0x20-0x2F: Linalg */
     [NPU_OP_MATMUL] = handle_matmul,
+    [NPU_OP_GEMM]   = handle_gemm,
+    [NPU_OP_DOT]    = handle_dot,
 
     /* 0x30-0x3F: Convolution */
     [NPU_OP_CONV2D]         = handle_conv2d,
@@ -603,11 +986,16 @@ static npu_handler_fn g_opcode_handlers[256] = {
     [NPU_OP_SIGMOID] = handle_sigmoid,
     [NPU_OP_TANH]    = handle_tanh,
     [NPU_OP_GELU]    = handle_gelu,
+    [NPU_OP_SWISH]   = handle_swish,
     [NPU_OP_SOFTMAX] = handle_softmax,
+    [NPU_OP_MISH]    = handle_mish,
 
     /* 0x50-0x5F: Normalization */
-    [NPU_OP_BATCHNORM] = handle_batchnorm,
-    [NPU_OP_LAYERNORM] = handle_layernorm,
+    [NPU_OP_BATCHNORM]    = handle_batchnorm,
+    [NPU_OP_LAYERNORM]    = handle_layernorm,
+    [NPU_OP_RMSNORM]      = handle_rmsnorm,
+    [NPU_OP_GROUPNORM]    = handle_groupnorm,
+    [NPU_OP_INSTANCENORM] = handle_instancenorm,
 
     /* 0x60-0x6F: Pooling */
     [NPU_OP_MAXPOOL] = handle_maxpool,
@@ -628,7 +1016,13 @@ static npu_handler_fn g_opcode_handlers[256] = {
     [NPU_OP_CONCAT]    = handle_concat,
     [NPU_OP_SPLIT]     = handle_split,
 
-    /* Remaining entries (0xA0-0xFF) are NULL by default */
+    /* 0xA0-0xAF: Attention */
+    [NPU_OP_SCALED_DOT_PRODUCT_ATTENTION] = handle_sdpa,
+
+    /* 0xB0-0xBF: Data Type */
+    [NPU_OP_CAST]       = handle_cast,
+    [NPU_OP_QUANTIZE]   = handle_quantize,
+    [NPU_OP_DEQUANTIZE] = handle_dequantize,
 };
 
 /* ================================================================== */

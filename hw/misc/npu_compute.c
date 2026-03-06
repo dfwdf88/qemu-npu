@@ -1419,3 +1419,687 @@ int npu_compute_depthwise_conv(const void* input, const void* weight, void* dst,
 
     return 0;
 }
+
+/* ========================================
+ * FMADD: dst[i] = a[i] * b[i] + c[i]
+ * ======================================== */
+
+int npu_compute_fmadd(const void* src_a, const void* src_b, const void* src_c,
+                      void* dst, uint32_t num_elements, uint8_t flags)
+{
+    uint32_t i;
+    if (!src_a || !src_b || !src_c || !dst)
+        return -1;
+    if (num_elements == 0)
+        return -2;
+
+    if (flags & NPU_COMPUTE_FLAG_FP16) {
+        const uint16_t *a = (const uint16_t *)src_a;
+        const uint16_t *b = (const uint16_t *)src_b;
+        const uint16_t *c = (const uint16_t *)src_c;
+        uint16_t *d = (uint16_t *)dst;
+        for (i = 0; i < num_elements; i++) {
+            float va = npu_fp16_to_fp32(a[i]);
+            float vb = npu_fp16_to_fp32(b[i]);
+            float vc = npu_fp16_to_fp32(c[i]);
+            d[i] = npu_fp32_to_fp16(va * vb + vc);
+        }
+    } else {
+        const float *a = (const float *)src_a;
+        const float *b = (const float *)src_b;
+        const float *c = (const float *)src_c;
+        float *d = (float *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = a[i] * b[i] + c[i];
+    }
+    return 0;
+}
+
+/* ========================================
+ * CLAMP: dst[i] = clamp(src[i], min, max)
+ * ======================================== */
+
+int npu_compute_clamp(const void* src, void* dst,
+                      uint32_t num_elements, float min_val, float max_val,
+                      uint8_t flags)
+{
+    uint32_t i;
+    if (!src || !dst)
+        return -1;
+    if (num_elements == 0)
+        return -2;
+
+    if (flags & NPU_COMPUTE_FLAG_FP16) {
+        const uint16_t *s = (const uint16_t *)src;
+        uint16_t *d = (uint16_t *)dst;
+        for (i = 0; i < num_elements; i++) {
+            float v = npu_fp16_to_fp32(s[i]);
+            if (v < min_val) v = min_val;
+            if (v > max_val) v = max_val;
+            d[i] = npu_fp32_to_fp16(v);
+        }
+    } else {
+        const float *s = (const float *)src;
+        float *d = (float *)dst;
+        for (i = 0; i < num_elements; i++) {
+            float v = s[i];
+            if (v < min_val) v = min_val;
+            if (v > max_val) v = max_val;
+            d[i] = v;
+        }
+    }
+    return 0;
+}
+
+/* ========================================
+ * EXP: dst[i] = exp(src[i])
+ * ======================================== */
+
+int npu_compute_exp(const void* src, void* dst,
+                    uint32_t num_elements, uint8_t flags)
+{
+    uint32_t i;
+    if (!src || !dst)
+        return -1;
+    if (num_elements == 0)
+        return -2;
+
+    if (flags & NPU_COMPUTE_FLAG_FP16) {
+        const uint16_t *s = (const uint16_t *)src;
+        uint16_t *d = (uint16_t *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = npu_fp32_to_fp16(expf(npu_fp16_to_fp32(s[i])));
+    } else {
+        const float *s = (const float *)src;
+        float *d = (float *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = expf(s[i]);
+    }
+    return 0;
+}
+
+/* ========================================
+ * LOG: dst[i] = log(src[i])
+ * ======================================== */
+
+int npu_compute_log(const void* src, void* dst,
+                    uint32_t num_elements, uint8_t flags)
+{
+    uint32_t i;
+    if (!src || !dst)
+        return -1;
+    if (num_elements == 0)
+        return -2;
+
+    if (flags & NPU_COMPUTE_FLAG_FP16) {
+        const uint16_t *s = (const uint16_t *)src;
+        uint16_t *d = (uint16_t *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = npu_fp32_to_fp16(logf(npu_fp16_to_fp32(s[i])));
+    } else {
+        const float *s = (const float *)src;
+        float *d = (float *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = logf(s[i]);
+    }
+    return 0;
+}
+
+/* ========================================
+ * SQRT: dst[i] = sqrt(src[i])
+ * ======================================== */
+
+int npu_compute_sqrt(const void* src, void* dst,
+                     uint32_t num_elements, uint8_t flags)
+{
+    uint32_t i;
+    if (!src || !dst)
+        return -1;
+    if (num_elements == 0)
+        return -2;
+
+    if (flags & NPU_COMPUTE_FLAG_FP16) {
+        const uint16_t *s = (const uint16_t *)src;
+        uint16_t *d = (uint16_t *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = npu_fp32_to_fp16(sqrtf(npu_fp16_to_fp32(s[i])));
+    } else {
+        const float *s = (const float *)src;
+        float *d = (float *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = sqrtf(s[i]);
+    }
+    return 0;
+}
+
+/* ========================================
+ * RSQRT: dst[i] = 1/sqrt(src[i])
+ * ======================================== */
+
+int npu_compute_rsqrt(const void* src, void* dst,
+                      uint32_t num_elements, uint8_t flags)
+{
+    uint32_t i;
+    if (!src || !dst)
+        return -1;
+    if (num_elements == 0)
+        return -2;
+
+    if (flags & NPU_COMPUTE_FLAG_FP16) {
+        const uint16_t *s = (const uint16_t *)src;
+        uint16_t *d = (uint16_t *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = npu_fp32_to_fp16(1.0f / sqrtf(npu_fp16_to_fp32(s[i])));
+    } else {
+        const float *s = (const float *)src;
+        float *d = (float *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = 1.0f / sqrtf(s[i]);
+    }
+    return 0;
+}
+
+/* ========================================
+ * ABS: dst[i] = |src[i]|
+ * ======================================== */
+
+int npu_compute_abs(const void* src, void* dst,
+                    uint32_t num_elements, uint8_t flags)
+{
+    uint32_t i;
+    if (!src || !dst)
+        return -1;
+    if (num_elements == 0)
+        return -2;
+
+    if (flags & NPU_COMPUTE_FLAG_FP16) {
+        const uint16_t *s = (const uint16_t *)src;
+        uint16_t *d = (uint16_t *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = npu_fp32_to_fp16(fabsf(npu_fp16_to_fp32(s[i])));
+    } else {
+        const float *s = (const float *)src;
+        float *d = (float *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = fabsf(s[i]);
+    }
+    return 0;
+}
+
+/* ========================================
+ * NEG: dst[i] = -src[i]
+ * ======================================== */
+
+int npu_compute_neg(const void* src, void* dst,
+                    uint32_t num_elements, uint8_t flags)
+{
+    uint32_t i;
+    if (!src || !dst)
+        return -1;
+    if (num_elements == 0)
+        return -2;
+
+    if (flags & NPU_COMPUTE_FLAG_FP16) {
+        const uint16_t *s = (const uint16_t *)src;
+        uint16_t *d = (uint16_t *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = npu_fp32_to_fp16(-npu_fp16_to_fp32(s[i]));
+    } else {
+        const float *s = (const float *)src;
+        float *d = (float *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = -s[i];
+    }
+    return 0;
+}
+
+/* ========================================
+ * SWISH: dst[i] = src[i] * sigmoid(src[i])
+ * ======================================== */
+
+int npu_compute_swish(const void* src, void* dst,
+                      uint32_t num_elements, uint8_t flags)
+{
+    uint32_t i;
+    if (!src || !dst)
+        return -1;
+    if (num_elements == 0)
+        return -2;
+
+    if (flags & NPU_COMPUTE_FLAG_FP16) {
+        const uint16_t *s = (const uint16_t *)src;
+        uint16_t *d = (uint16_t *)dst;
+        for (i = 0; i < num_elements; i++) {
+            float x = npu_fp16_to_fp32(s[i]);
+            d[i] = npu_fp32_to_fp16(x / (1.0f + expf(-x)));
+        }
+    } else {
+        const float *s = (const float *)src;
+        float *d = (float *)dst;
+        for (i = 0; i < num_elements; i++)
+            d[i] = s[i] / (1.0f + expf(-s[i]));
+    }
+    return 0;
+}
+
+/* ========================================
+ * MISH: dst[i] = src[i] * tanh(softplus(src[i]))
+ * ======================================== */
+
+int npu_compute_mish(const void* src, void* dst,
+                     uint32_t num_elements, uint8_t flags)
+{
+    uint32_t i;
+    if (!src || !dst)
+        return -1;
+    if (num_elements == 0)
+        return -2;
+
+    if (flags & NPU_COMPUTE_FLAG_FP16) {
+        const uint16_t *s = (const uint16_t *)src;
+        uint16_t *d = (uint16_t *)dst;
+        for (i = 0; i < num_elements; i++) {
+            float x = npu_fp16_to_fp32(s[i]);
+            float sp = logf(1.0f + expf(x));
+            d[i] = npu_fp32_to_fp16(x * tanhf(sp));
+        }
+    } else {
+        const float *s = (const float *)src;
+        float *d = (float *)dst;
+        for (i = 0; i < num_elements; i++) {
+            float sp = logf(1.0f + expf(s[i]));
+            d[i] = s[i] * tanhf(sp);
+        }
+    }
+    return 0;
+}
+
+/* ========================================
+ * GEMM: C = alpha * A @ B + beta * C
+ * ======================================== */
+
+int npu_compute_gemm(const void* A, const void* B, void* C,
+                     uint32_t m, uint32_t n, uint32_t k,
+                     float alpha, float beta, uint8_t flags)
+{
+    uint32_t i, j, p;
+    int transpose_a = (flags & 0x02) != 0;
+    int transpose_b = (flags & 0x04) != 0;
+    int fp16        = (flags & NPU_COMPUTE_FLAG_FP16) != 0;
+
+    uint32_t a_cols = transpose_a ? m : k;
+    uint32_t b_cols = transpose_b ? k : n;
+
+    if (!A || !B || !C)
+        return -1;
+    if (m == 0 || n == 0 || k == 0)
+        return -2;
+
+    if (fp16) {
+        const uint16_t *Ah = (const uint16_t *)A;
+        const uint16_t *Bh = (const uint16_t *)B;
+        uint16_t *Ch = (uint16_t *)C;
+
+        for (i = 0; i < m; i++) {
+            for (j = 0; j < n; j++) {
+                float sum = 0.0f;
+                for (p = 0; p < k; p++)
+                    sum += mat_get_fp16(Ah, i, p, a_cols, transpose_a) *
+                           mat_get_fp16(Bh, p, j, b_cols, transpose_b);
+                float old_c = npu_fp16_to_fp32(Ch[i * n + j]);
+                Ch[i * n + j] = npu_fp32_to_fp16(alpha * sum + beta * old_c);
+            }
+        }
+    } else {
+        const float *Af = (const float *)A;
+        const float *Bf = (const float *)B;
+        float *Cf = (float *)C;
+
+        for (i = 0; i < m; i++) {
+            for (j = 0; j < n; j++) {
+                float sum = 0.0f;
+                for (p = 0; p < k; p++)
+                    sum += mat_get_fp32(Af, i, p, a_cols, transpose_a) *
+                           mat_get_fp32(Bf, p, j, b_cols, transpose_b);
+                Cf[i * n + j] = alpha * sum + beta * Cf[i * n + j];
+            }
+        }
+    }
+    return 0;
+}
+
+/* ========================================
+ * DOT: dst = sum(a[i] * b[i])
+ * ======================================== */
+
+int npu_compute_dot(const void* src_a, const void* src_b, void* dst,
+                    uint32_t num_elements, uint8_t flags)
+{
+    uint32_t i;
+    if (!src_a || !src_b || !dst)
+        return -1;
+    if (num_elements == 0)
+        return -2;
+
+    float sum = 0.0f;
+    if (flags & NPU_COMPUTE_FLAG_FP16) {
+        const uint16_t *a = (const uint16_t *)src_a;
+        const uint16_t *b = (const uint16_t *)src_b;
+        for (i = 0; i < num_elements; i++)
+            sum += npu_fp16_to_fp32(a[i]) * npu_fp16_to_fp32(b[i]);
+        *(uint16_t *)dst = npu_fp32_to_fp16(sum);
+    } else {
+        const float *a = (const float *)src_a;
+        const float *b = (const float *)src_b;
+        for (i = 0; i < num_elements; i++)
+            sum += a[i] * b[i];
+        *(float *)dst = sum;
+    }
+    return 0;
+}
+
+/* ========================================
+ * RMSNORM: dst = src / rms(src) * weight
+ * ======================================== */
+
+int npu_compute_rmsnorm(const void* src, const void* weight, void* dst,
+                        uint32_t batch_size, uint32_t normalized_shape,
+                        float epsilon, uint8_t flags)
+{
+    uint32_t b, i;
+    if (!src || !dst)
+        return -1;
+
+    const float *sf = (const float *)src;
+    const float *wf = (const float *)weight;
+    float *df = (float *)dst;
+
+    for (b = 0; b < batch_size; b++) {
+        const float *row = &sf[b * normalized_shape];
+        float *out = &df[b * normalized_shape];
+
+        float sum_sq = 0.0f;
+        for (i = 0; i < normalized_shape; i++)
+            sum_sq += row[i] * row[i];
+        float rms = sqrtf(sum_sq / normalized_shape + epsilon);
+
+        for (i = 0; i < normalized_shape; i++) {
+            float val = row[i] / rms;
+            if (wf)
+                val *= wf[i];
+            out[i] = val;
+        }
+    }
+    return 0;
+}
+
+/* ========================================
+ * GROUPNORM: normalize within channel groups
+ * ======================================== */
+
+int npu_compute_groupnorm(const void* src, const void* gamma, const void* beta,
+                          void* dst, uint32_t num_groups, uint32_t num_channels,
+                          uint32_t spatial_size, float epsilon, uint8_t flags)
+{
+    uint32_t g, c, s;
+    if (!src || !dst)
+        return -1;
+
+    const float *sf = (const float *)src;
+    const float *gf = (const float *)gamma;
+    const float *bf = (const float *)beta;
+    float *df = (float *)dst;
+    int affine = (flags & 0x02) != 0;
+
+    uint32_t channels_per_group = num_channels / num_groups;
+    uint32_t group_size = channels_per_group * spatial_size;
+
+    for (g = 0; g < num_groups; g++) {
+        uint32_t group_start = g * group_size;
+
+        float mean = 0.0f;
+        for (s = 0; s < group_size; s++)
+            mean += sf[group_start + s];
+        mean /= group_size;
+
+        float var = 0.0f;
+        for (s = 0; s < group_size; s++) {
+            float diff = sf[group_start + s] - mean;
+            var += diff * diff;
+        }
+        var /= group_size;
+
+        float inv_std = 1.0f / sqrtf(var + epsilon);
+
+        for (c = 0; c < channels_per_group; c++) {
+            uint32_t ch_idx = g * channels_per_group + c;
+            for (s = 0; s < spatial_size; s++) {
+                uint32_t idx = group_start + c * spatial_size + s;
+                float val = (sf[idx] - mean) * inv_std;
+                if (affine && gf && bf)
+                    val = val * gf[ch_idx] + bf[ch_idx];
+                df[idx] = val;
+            }
+        }
+    }
+    return 0;
+}
+
+/* ========================================
+ * INSTANCENORM: normalize per channel
+ * ======================================== */
+
+int npu_compute_instancenorm(const void* src, const void* gamma, const void* beta,
+                             void* dst, uint32_t num_channels, uint32_t spatial_size,
+                             float epsilon, uint8_t flags)
+{
+    uint32_t c, s;
+    if (!src || !dst)
+        return -1;
+
+    const float *sf = (const float *)src;
+    const float *gf = (const float *)gamma;
+    const float *bf = (const float *)beta;
+    float *df = (float *)dst;
+    int affine = (flags & 0x02) != 0;
+
+    for (c = 0; c < num_channels; c++) {
+        uint32_t ch_start = c * spatial_size;
+
+        float mean = 0.0f;
+        for (s = 0; s < spatial_size; s++)
+            mean += sf[ch_start + s];
+        mean /= spatial_size;
+
+        float var = 0.0f;
+        for (s = 0; s < spatial_size; s++) {
+            float diff = sf[ch_start + s] - mean;
+            var += diff * diff;
+        }
+        var /= spatial_size;
+
+        float inv_std = 1.0f / sqrtf(var + epsilon);
+
+        for (s = 0; s < spatial_size; s++) {
+            float val = (sf[ch_start + s] - mean) * inv_std;
+            if (affine && gf && bf)
+                val = val * gf[c] + bf[c];
+            df[ch_start + s] = val;
+        }
+    }
+    return 0;
+}
+
+/* ========================================
+ * SCALED_DOT_PRODUCT_ATTENTION
+ * dst = softmax(Q @ K^T / scale) @ V
+ * ======================================== */
+
+int npu_compute_sdpa(const void* Q, const void* K, const void* V, void* dst,
+                     uint32_t num_heads, uint32_t seq_len_q, uint32_t seq_len_kv,
+                     uint32_t head_dim, float scale, uint8_t flags)
+{
+    uint32_t h, i, j, d;
+    int causal = (flags & 0x02) != 0;
+
+    if (!Q || !K || !V || !dst)
+        return -1;
+
+    const float *Qf = (const float *)Q;
+    const float *Kf = (const float *)K;
+    const float *Vf = (const float *)V;
+    float *Df = (float *)dst;
+
+    uint32_t qk_stride = seq_len_q * head_dim;
+    uint32_t kv_stride = seq_len_kv * head_dim;
+
+    for (h = 0; h < num_heads; h++) {
+        const float *q = &Qf[h * qk_stride];
+        const float *k = &Kf[h * kv_stride];
+        const float *v = &Vf[h * kv_stride];
+        float *out = &Df[h * qk_stride];
+
+        for (i = 0; i < seq_len_q; i++) {
+            float scores[1024];
+            float max_score = -1e30f;
+
+            for (j = 0; j < seq_len_kv; j++) {
+                float dot = 0.0f;
+                for (d = 0; d < head_dim; d++)
+                    dot += q[i * head_dim + d] * k[j * head_dim + d];
+                dot *= scale;
+
+                if (causal && j > i)
+                    dot = -1e30f;
+
+                scores[j] = dot;
+                if (dot > max_score)
+                    max_score = dot;
+            }
+
+            float sum_exp = 0.0f;
+            for (j = 0; j < seq_len_kv; j++) {
+                scores[j] = expf(scores[j] - max_score);
+                sum_exp += scores[j];
+            }
+            for (j = 0; j < seq_len_kv; j++)
+                scores[j] /= sum_exp;
+
+            for (d = 0; d < head_dim; d++) {
+                float val = 0.0f;
+                for (j = 0; j < seq_len_kv; j++)
+                    val += scores[j] * v[j * head_dim + d];
+                out[i * head_dim + d] = val;
+            }
+        }
+    }
+    return 0;
+}
+
+/* ========================================
+ * CAST: convert between data types
+ * dtype: 0=fp32 1=fp16 2=int8 3=int32
+ * ======================================== */
+
+int npu_compute_cast(const void* src, void* dst,
+                     uint32_t num_elements, uint8_t src_dtype, uint8_t dst_dtype)
+{
+    uint32_t i;
+    if (!src || !dst)
+        return -1;
+    if (num_elements == 0)
+        return -2;
+    if (src_dtype == dst_dtype) {
+        uint32_t elem_sizes[] = {4, 2, 1, 4};
+        memcpy(dst, src, (size_t)num_elements * elem_sizes[src_dtype]);
+        return 0;
+    }
+
+    for (i = 0; i < num_elements; i++) {
+        float val;
+        switch (src_dtype) {
+            case 0: val = ((const float *)src)[i]; break;
+            case 1: val = npu_fp16_to_fp32(((const uint16_t *)src)[i]); break;
+            case 2: val = (float)((const int8_t *)src)[i]; break;
+            case 3: val = (float)((const int32_t *)src)[i]; break;
+            default: return -1;
+        }
+        switch (dst_dtype) {
+            case 0: ((float *)dst)[i] = val; break;
+            case 1: ((uint16_t *)dst)[i] = npu_fp32_to_fp16(val); break;
+            case 2: {
+                int v = (int)(val + (val >= 0 ? 0.5f : -0.5f));
+                if (v > 127) v = 127;
+                if (v < -128) v = -128;
+                ((int8_t *)dst)[i] = (int8_t)v;
+                break;
+            }
+            case 3: ((int32_t *)dst)[i] = (int32_t)val; break;
+            default: return -1;
+        }
+    }
+    return 0;
+}
+
+/* ========================================
+ * QUANTIZE: fp32 -> int8
+ * ======================================== */
+
+int npu_compute_quantize(const void* src, void* dst,
+                         const void* scale, const void* zero_point,
+                         uint32_t num_elements, uint32_t num_channels,
+                         uint8_t flags)
+{
+    uint32_t i;
+    int per_channel = (flags & 0x01) != 0;
+
+    if (!src || !dst || !scale || !zero_point)
+        return -1;
+
+    const float *sf = (const float *)src;
+    int8_t *di = (int8_t *)dst;
+    const float *sc = (const float *)scale;
+    const int8_t *zp = (const int8_t *)zero_point;
+
+    uint32_t elements_per_channel = per_channel ? num_elements / num_channels : 0;
+
+    for (i = 0; i < num_elements; i++) {
+        uint32_t ch = per_channel ? (i / elements_per_channel) : 0;
+        float s = sc[ch];
+        int z = zp[ch];
+        int v = (int)roundf(sf[i] / s) + z;
+        if (v > 127) v = 127;
+        if (v < -128) v = -128;
+        di[i] = (int8_t)v;
+    }
+    return 0;
+}
+
+/* ========================================
+ * DEQUANTIZE: int8 -> fp32
+ * ======================================== */
+
+int npu_compute_dequantize(const void* src, void* dst,
+                           const void* scale, const void* zero_point,
+                           uint32_t num_elements, uint32_t num_channels,
+                           uint8_t flags)
+{
+    uint32_t i;
+    int per_channel = (flags & 0x01) != 0;
+
+    if (!src || !dst || !scale || !zero_point)
+        return -1;
+
+    const int8_t *si = (const int8_t *)src;
+    float *df = (float *)dst;
+    const float *sc = (const float *)scale;
+    const int8_t *zp = (const int8_t *)zero_point;
+
+    uint32_t elements_per_channel = per_channel ? num_elements / num_channels : 0;
+
+    for (i = 0; i < num_elements; i++) {
+        uint32_t ch = per_channel ? (i / elements_per_channel) : 0;
+        df[i] = ((float)si[i] - (float)zp[ch]) * sc[ch];
+    }
+    return 0;
+}

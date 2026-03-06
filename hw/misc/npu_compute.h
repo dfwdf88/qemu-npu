@@ -64,6 +64,39 @@ int npu_compute_mul(const void* src_a, const void* src_b, void* dst,
 int npu_compute_div(const void* src_a, const void* src_b, void* dst,
                     uint32_t num_elements, uint8_t flags);
 
+/* FMADD: dst[i] = a[i] * b[i] + c[i] */
+int npu_compute_fmadd(const void* src_a, const void* src_b, const void* src_c,
+                      void* dst, uint32_t num_elements, uint8_t flags);
+
+/* CLAMP: dst[i] = clamp(src[i], min, max) */
+int npu_compute_clamp(const void* src, void* dst,
+                      uint32_t num_elements, float min_val, float max_val,
+                      uint8_t flags);
+
+/* EXP: dst[i] = exp(src[i]) */
+int npu_compute_exp(const void* src, void* dst,
+                    uint32_t num_elements, uint8_t flags);
+
+/* LOG: dst[i] = log(src[i]) */
+int npu_compute_log(const void* src, void* dst,
+                    uint32_t num_elements, uint8_t flags);
+
+/* SQRT: dst[i] = sqrt(src[i]) */
+int npu_compute_sqrt(const void* src, void* dst,
+                     uint32_t num_elements, uint8_t flags);
+
+/* RSQRT: dst[i] = 1/sqrt(src[i]) */
+int npu_compute_rsqrt(const void* src, void* dst,
+                      uint32_t num_elements, uint8_t flags);
+
+/* ABS: dst[i] = |src[i]| */
+int npu_compute_abs(const void* src, void* dst,
+                    uint32_t num_elements, uint8_t flags);
+
+/* NEG: dst[i] = -src[i] */
+int npu_compute_neg(const void* src, void* dst,
+                    uint32_t num_elements, uint8_t flags);
+
 /*
  * Activation Functions
  */
@@ -83,6 +116,14 @@ int npu_compute_gelu(const void* src, void* dst,
 /* SOFTMAX: dst = softmax(src) along last axis */
 int npu_compute_softmax(const void* src, void* dst,
                         uint32_t batch_size, uint32_t axis_size, uint8_t flags);
+
+/* SWISH: dst[i] = src[i] * sigmoid(src[i]) */
+int npu_compute_swish(const void* src, void* dst,
+                      uint32_t num_elements, uint8_t flags);
+
+/* MISH: dst[i] = src[i] * tanh(softplus(src[i])) */
+int npu_compute_mish(const void* src, void* dst,
+                     uint32_t num_elements, uint8_t flags);
 
 /*
  * Reduction Operations
@@ -157,6 +198,21 @@ int npu_compute_layernorm(const void* src, const void* gamma, const void* beta,
                           void* dst, uint32_t batch_size, uint32_t normalized_shape,
                           float epsilon, uint8_t flags);
 
+/* RMSNORM: dst = src / rms(src) * weight */
+int npu_compute_rmsnorm(const void* src, const void* weight, void* dst,
+                        uint32_t batch_size, uint32_t normalized_shape,
+                        float epsilon, uint8_t flags);
+
+/* GROUPNORM: normalize within channel groups */
+int npu_compute_groupnorm(const void* src, const void* gamma, const void* beta,
+                          void* dst, uint32_t num_groups, uint32_t num_channels,
+                          uint32_t spatial_size, float epsilon, uint8_t flags);
+
+/* INSTANCENORM: normalize per channel per sample */
+int npu_compute_instancenorm(const void* src, const void* gamma, const void* beta,
+                             void* dst, uint32_t num_channels, uint32_t spatial_size,
+                             float epsilon, uint8_t flags);
+
 /*
  * Convolution Operations
  */
@@ -174,5 +230,47 @@ int npu_compute_depthwise_conv(const void* input, const void* weight, void* dst,
                                uint8_t kernel_h, uint8_t kernel_w,
                                uint8_t pad_h, uint8_t pad_w,
                                uint8_t stride_h, uint8_t stride_w, uint8_t flags);
+
+/*
+ * Linear Algebra (extended)
+ */
+
+/* GEMM: C = alpha * A @ B + beta * C */
+int npu_compute_gemm(const void* A, const void* B, void* C,
+                     uint32_t m, uint32_t n, uint32_t k,
+                     float alpha, float beta, uint8_t flags);
+
+/* DOT: dst = sum(a[i] * b[i]) */
+int npu_compute_dot(const void* src_a, const void* src_b, void* dst,
+                    uint32_t num_elements, uint8_t flags);
+
+/*
+ * Attention Operations
+ */
+
+/* SCALED_DOT_PRODUCT_ATTENTION: dst = softmax(Q @ K^T / scale) @ V */
+int npu_compute_sdpa(const void* Q, const void* K, const void* V, void* dst,
+                     uint32_t num_heads, uint32_t seq_len_q, uint32_t seq_len_kv,
+                     uint32_t head_dim, float scale, uint8_t flags);
+
+/*
+ * Data Type Operations
+ */
+
+/* CAST: convert between data types */
+int npu_compute_cast(const void* src, void* dst,
+                     uint32_t num_elements, uint8_t src_dtype, uint8_t dst_dtype);
+
+/* QUANTIZE: fp32 -> int8 */
+int npu_compute_quantize(const void* src, void* dst,
+                         const void* scale, const void* zero_point,
+                         uint32_t num_elements, uint32_t num_channels,
+                         uint8_t flags);
+
+/* DEQUANTIZE: int8 -> fp32 */
+int npu_compute_dequantize(const void* src, void* dst,
+                           const void* scale, const void* zero_point,
+                           uint32_t num_elements, uint32_t num_channels,
+                           uint8_t flags);
 
 #endif /* NPU_COMPUTE_H */
