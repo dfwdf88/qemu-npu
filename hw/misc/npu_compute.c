@@ -2103,3 +2103,157 @@ int npu_compute_dequantize(const void* src, void* dst,
     }
     return 0;
 }
+
+/* ========================================
+ * Data Movement / Manipulation Operations
+ * ======================================== */
+
+int npu_compute_gather(const void* src, const void* indices, void* dst,
+                       uint32_t outer_size, uint32_t gather_size,
+                       uint32_t inner_size, uint32_t num_indices, uint8_t flags)
+{
+    int is_fp16 = (flags & NPU_COMPUTE_FLAG_FP16) != 0;
+    uint32_t elem_size = is_fp16 ? 2 : 4;
+    uint32_t o, idx_i;
+
+    if (!src || !indices || !dst)
+        return -1;
+
+    const uint8_t *sp = (const uint8_t *)src;
+    const uint32_t *ip = (const uint32_t *)indices;
+    uint8_t *dp = (uint8_t *)dst;
+
+    for (o = 0; o < outer_size; o++) {
+        for (idx_i = 0; idx_i < num_indices; idx_i++) {
+            uint32_t gather_idx = ip[o * num_indices + idx_i];
+            if (gather_idx >= gather_size)
+                return -1;
+
+            uint32_t src_off = (o * gather_size + gather_idx) * inner_size * elem_size;
+            uint32_t dst_off = (o * num_indices + idx_i) * inner_size * elem_size;
+
+            memcpy(&dp[dst_off], &sp[src_off], inner_size * elem_size);
+        }
+    }
+    return 0;
+}
+
+int npu_compute_slice(const void* src, void* dst,
+                      uint32_t outer_size, uint32_t src_axis_size,
+                      uint32_t inner_size, uint32_t start,
+                      uint32_t length, uint32_t step, uint8_t flags)
+{
+    int is_fp16 = (flags & NPU_COMPUTE_FLAG_FP16) != 0;
+    uint32_t elem_size = is_fp16 ? 2 : 4;
+    uint32_t o, s, dst_idx;
+
+    if (!src || !dst)
+        return -1;
+    if (step == 0)
+        return -1;
+
+    const uint8_t *sp = (const uint8_t *)src;
+    uint8_t *dp = (uint8_t *)dst;
+
+    for (o = 0; o < outer_size; o++) {
+        dst_idx = 0;
+        for (s = 0; s < length; s++) {
+            uint32_t src_pos = start + s * step;
+            if (src_pos >= src_axis_size)
+                break;
+
+            uint32_t src_off = (o * src_axis_size + src_pos) * inner_size * elem_size;
+            uint32_t dst_off = (o * length + dst_idx) * inner_size * elem_size;
+
+            memcpy(&dp[dst_off], &sp[src_off], inner_size * elem_size);
+            dst_idx++;
+        }
+    }
+    return 0;
+}
+
+int npu_compute_pad(const void* src, void* dst,
+                    const uint16_t* src_dims, const uint16_t* pad_before,
+                    const uint16_t* pad_after, uint8_t num_dims,
+                    uint32_t pad_value_bits, uint8_t flags)
+{
+    int is_fp16 = (flags & NPU_COMPUTE_FLAG_FP16) != 0;
+    uint32_t elem_size = is_fp16 ? 2 : 4;
+    uint32_t dst_dims[4], dst_total;
+    uint32_t d, i;
+
+    if (!src || !dst || !src_dims || !pad_before || !pad_after)
+        return -1;
+    if (num_dims == 0 || num_dims > 4)
+        return -1;
+
+    /* Calculate destination dimensions and total size */
+    dst_total = 1;
+    for (d = 0; d < num_dims; d++) {
+        dst_dims[d] = pad_before[d] + src_dims[d] + pad_after[d];
+        dst_total *= dst_dims[d];
+    }
+
+    /* Fill entire destination with pad value */
+    if (is_fp16) {
+        uint16_t pv = (uint16_t)(pad_value_bits & 0xFFFF);
+        uint16_t *dp = (uint16_t *)dst;
+        for (i = 0; i < dst_total; i++) dp[i] = pv;
+    } else {
+        uint32_t *dp = (uint32_t *)dst;
+        for (i = 0; i < dst_total; i++) dp[i] = pad_value_bits;
+    }
+
+    /* Copy source data into padded region */
+    /* Simplified for 1D-4D: iterate source and compute dst position */
+    {
+        const uint8_t *sp = (const uint8_t *)src;
+        uint8_t *dp = (uint8_t *)dst;
+        uint32_t src_strides[4] = {1, 1, 1, 1};
+        uint32_t dst_strides[4] = {1, 1, 1, 1};
+
+        for (d = num_dims - 1; d > 0; d--) {
+            src_strides[d - 1] = src_strides[d] * src_dims[d];
+            dst_strides[d - 1] = dst_strides[d] * dst_dims[d];
+        }
+
+        uint32_t src_total = 1;
+        for (d = 0; d < num_dims; d++) src_total *= src_dims[d];
+
+        for (i = 0; i < src_total; i++) {
+            /* Convert flat index to per-dim coords */
+            uint32_t src_off = 0, dst_off = 0, rem = i;
+            for (d = 0; d < num_dims; d++) {
+                uint32_t coord = rem / src_strides[d];
+                rem = rem % src_strides[d];
+                src_off += coord * src_strides[d];
+                dst_off += (coord + pad_before[d]) * dst_strides[d];
+            }
+            memcpy(&dp[dst_off * elem_size], &sp[src_off * elem_size], elem_size);
+        }
+    }
+    return 0;
+}
+
+int npu_compute_where(const void* cond, const void* true_val,
+                      const void* false_val, void* dst,
+                      uint32_t num_elements, uint8_t flags)
+{
+    int is_fp16 = (flags & NPU_COMPUTE_FLAG_FP16) != 0;
+    uint32_t elem_size = is_fp16 ? 2 : 4;
+    uint32_t i;
+
+    if (!cond || !true_val || !false_val || !dst)
+        return -1;
+
+    const uint8_t *cp = (const uint8_t *)cond;
+    const uint8_t *tp = (const uint8_t *)true_val;
+    const uint8_t *fp = (const uint8_t *)false_val;
+    uint8_t *dp = (uint8_t *)dst;
+
+    for (i = 0; i < num_elements; i++) {
+        const uint8_t *selected = cp[i] ? &tp[i * elem_size] : &fp[i * elem_size];
+        memcpy(&dp[i * elem_size], selected, elem_size);
+    }
+    return 0;
+}

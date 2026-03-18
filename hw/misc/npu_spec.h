@@ -18,6 +18,17 @@
 #define _Static_assert static_assert
 #endif
 
+/* Cross-platform packed struct support */
+#ifdef _MSC_VER
+    #define PACKED_STRUCT_BEGIN __pragma(pack(push, 1))
+    #define PACKED_STRUCT_END   __pragma(pack(pop))
+    #define PACKED_ATTR
+#else
+    #define PACKED_STRUCT_BEGIN
+    #define PACKED_STRUCT_END
+    #define PACKED_ATTR __attribute__((packed))
+#endif
+
 #define NPU_INST_SIZE 64
 
 /* ================================================================== */
@@ -66,6 +77,10 @@ typedef enum {
     NPU_OP_RESHAPE            = 0x91,  /* Tensor reshape (metadata-only if contiguous) */
     NPU_OP_CONCAT             = 0x92,  /* Concatenate tensors along specified axis */
     NPU_OP_SPLIT              = 0x93,  /* Split tensor along specified axis */
+    NPU_OP_GATHER             = 0x94,  /* Gather elements along axis: dst[i] = src[indices[i]] */
+    NPU_OP_SLICE              = 0x95,  /* Extract sub-tensor along axis: dst = src[start:start+length:step] */
+    NPU_OP_PAD                = 0x96,  /* Pad tensor with constant value */
+    NPU_OP_WHERE              = 0x97,  /* Element-wise conditional select: dst[i] = cond[i] ? true[i] : false[i] */
     NPU_OP_SCALED_DOT_PRODUCT_ATTENTION = 0xA0,  /* Scaled dot-product attention: dst = softmax(Q @ K^T / sqrt(d)) @ V */
     NPU_OP_CAST               = 0xB0,  /* Data type cast: convert elements between fp32/fp16/int8 */
     NPU_OP_QUANTIZE           = 0xB1,  /* Quantize fp32 to int8: dst = clamp(round(src / scale) + zero_point) */
@@ -671,6 +686,94 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(npu_inst_split_t) == NPU_INST_SIZE,
               "npu_inst_split_t must be 64 bytes");
 
+/* Gather elements along axis: dst[i] = src[indices[i]] */
+typedef struct __attribute__((packed)) {
+    uint8_t opcode;                      /* +0x00: Opcode (0x94) */
+    uint8_t sub_opcode;                  /* +0x01: Sub-opcode */
+    uint8_t flags;                       /* +0x02: [0]=fp16 */
+    uint8_t axis;                        /* +0x03: Gather axis (0-3) */
+    uint32_t reserved1;                  /* +0x04: Reserved */
+    uint64_t src_addr;                   /* +0x08: Source tensor SRAM address */
+    uint64_t idx_addr;                   /* +0x10: Indices tensor SRAM address (u32 elements) */
+    uint64_t dst_addr;                   /* +0x18: Output tensor SRAM address */
+    uint32_t outer_size;                 /* +0x20: Product of dims before axis */
+    uint32_t gather_size;                /* +0x24: Size of source gather axis */
+    uint32_t inner_size;                 /* +0x28: Product of dims after axis */
+    uint32_t num_indices;                /* +0x2C: Number of indices to gather */
+    uint8_t reserved_pad[16];            /* +0x30: Padding to 64 bytes */
+} npu_inst_gather_t;
+
+_Static_assert(sizeof(npu_inst_gather_t) == NPU_INST_SIZE,
+              "npu_inst_gather_t must be 64 bytes");
+
+/* Extract sub-tensor along axis: dst = src[start:start+length:step] */
+typedef struct __attribute__((packed)) {
+    uint8_t opcode;                      /* +0x00: Opcode (0x95) */
+    uint8_t sub_opcode;                  /* +0x01: Sub-opcode */
+    uint8_t flags;                       /* +0x02: [0]=fp16 */
+    uint8_t axis;                        /* +0x03: Slice axis (0-3) */
+    uint32_t reserved1;                  /* +0x04: Reserved */
+    uint64_t src_addr;                   /* +0x08: Source tensor SRAM address */
+    uint64_t dst_addr;                   /* +0x10: Output tensor SRAM address */
+    uint32_t outer_size;                 /* +0x18: Product of dims before axis */
+    uint32_t src_axis_size;              /* +0x1C: Source axis size */
+    uint32_t inner_size;                 /* +0x20: Product of dims after axis */
+    uint32_t start;                      /* +0x24: Slice start index */
+    uint32_t length;                     /* +0x28: Slice length (number of elements) */
+    uint32_t step;                       /* +0x2C: Slice step (stride, 1=contiguous) */
+    uint8_t reserved_pad[16];            /* +0x30: Padding to 64 bytes */
+} npu_inst_slice_t;
+
+_Static_assert(sizeof(npu_inst_slice_t) == NPU_INST_SIZE,
+              "npu_inst_slice_t must be 64 bytes");
+
+/* Pad tensor with constant value */
+typedef struct __attribute__((packed)) {
+    uint8_t opcode;                      /* +0x00: Opcode (0x96) */
+    uint8_t sub_opcode;                  /* +0x01: Sub-opcode */
+    uint8_t flags;                       /* +0x02: [0]=fp16 [1]=reflect_mode */
+    uint8_t num_dims;                    /* +0x03: Number of dimensions (1-4) */
+    uint32_t reserved1;                  /* +0x04: Reserved */
+    uint64_t src_addr;                   /* +0x08: Source tensor SRAM address */
+    uint64_t dst_addr;                   /* +0x10: Output tensor SRAM address */
+    uint32_t pad_value;                  /* +0x18: Pad constant (float32 bits or fp16 in lower 16) */
+    uint16_t src_dim0;                   /* +0x1C: Source dimension 0 size */
+    uint16_t src_dim1;                   /* +0x1E: Source dimension 1 size */
+    uint16_t src_dim2;                   /* +0x20: Source dimension 2 size */
+    uint16_t src_dim3;                   /* +0x22: Source dimension 3 size */
+    uint16_t pad_before0;                /* +0x24: Padding before dim 0 */
+    uint16_t pad_after0;                 /* +0x26: Padding after dim 0 */
+    uint16_t pad_before1;                /* +0x28: Padding before dim 1 */
+    uint16_t pad_after1;                 /* +0x2A: Padding after dim 1 */
+    uint16_t pad_before2;                /* +0x2C: Padding before dim 2 */
+    uint16_t pad_after2;                 /* +0x2E: Padding after dim 2 */
+    uint16_t pad_before3;                /* +0x30: Padding before dim 3 */
+    uint16_t pad_after3;                 /* +0x32: Padding after dim 3 */
+    uint8_t reserved_pad[12];            /* +0x34: Padding to 64 bytes */
+} npu_inst_pad_t;
+
+_Static_assert(sizeof(npu_inst_pad_t) == NPU_INST_SIZE,
+              "npu_inst_pad_t must be 64 bytes");
+
+/* Element-wise conditional select: dst[i] = cond[i] ? true[i] : false[i] */
+typedef struct __attribute__((packed)) {
+    uint8_t opcode;                      /* +0x00: Opcode (0x97) */
+    uint8_t sub_opcode;                  /* +0x01: Sub-opcode */
+    uint8_t flags;                       /* +0x02: [0]=fp16 [1]=broadcast_true [2]=broadcast_false */
+    uint8_t reserved0;                   /* +0x03: Reserved */
+    uint32_t reserved1;                  /* +0x04: Reserved */
+    uint64_t cond_addr;                  /* +0x08: Condition tensor SRAM address (u8 bool) */
+    uint64_t true_addr;                  /* +0x10: True values tensor SRAM address */
+    uint64_t false_addr;                 /* +0x18: False values tensor SRAM address */
+    uint64_t dst_addr;                   /* +0x20: Output tensor SRAM address */
+    uint32_t num_elements;               /* +0x28: Total number of elements */
+    uint32_t reserved2;                  /* +0x2C: Reserved */
+    uint8_t reserved_pad[16];            /* +0x30: Padding to 64 bytes */
+} npu_inst_where_t;
+
+_Static_assert(sizeof(npu_inst_where_t) == NPU_INST_SIZE,
+              "npu_inst_where_t must be 64 bytes");
+
 /* ================================================================== */
 /* LINALG Instructions                                   */
 /* ================================================================== */
@@ -1029,6 +1132,10 @@ typedef union __attribute__((packed)) {
     npu_inst_reshape_t                   reshape;
     npu_inst_concat_t                    concat;
     npu_inst_split_t                     split;
+    npu_inst_gather_t                    gather;
+    npu_inst_slice_t                     slice;
+    npu_inst_pad_t                       pad;
+    npu_inst_where_t                     where;
     npu_inst_scaled_dot_product_attention_t scaled_dot_product_attention;
     npu_inst_cast_t                      cast;
     npu_inst_quantize_t                  quantize;
@@ -1038,6 +1145,6 @@ typedef union __attribute__((packed)) {
 _Static_assert(sizeof(npu_inst_t) == NPU_INST_SIZE,
               "npu_inst_t must be 64 bytes");
 
-#define NPU_OPCODE_COUNT 46
+#define NPU_OPCODE_COUNT 50
 
 #endif /* UNAF_NPU_SPEC_H */

@@ -945,6 +945,101 @@ static int handle_depthwise_conv(npu_exec_ctx_t *ctx)
 }
 
 /* ================================================================== */
+/* Data Movement / Manipulation Handlers                              */
+/* ================================================================== */
+
+static int handle_gather(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_gather_t *inst = &ctx->inst->gather;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+
+    uint32_t src_bytes = inst->outer_size * inst->gather_size * inst->inner_size * elem_size;
+    uint32_t idx_bytes = inst->outer_size * inst->num_indices * sizeof(uint32_t);
+    uint32_t dst_bytes = inst->outer_size * inst->num_indices * inst->inner_size * elem_size;
+
+    if (!sram_bounds_ok(inst->src_addr, src_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->idx_addr, idx_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, dst_bytes))
+        return -1;
+
+    return npu_compute_gather(&ctx->engine->sram[inst->src_addr],
+                              &ctx->engine->sram[inst->idx_addr],
+                              &ctx->engine->sram[inst->dst_addr],
+                              inst->outer_size, inst->gather_size,
+                              inst->inner_size, inst->num_indices, inst->flags);
+}
+
+static int handle_slice(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_slice_t *inst = &ctx->inst->slice;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+
+    uint32_t src_bytes = inst->outer_size * inst->src_axis_size * inst->inner_size * elem_size;
+    uint32_t dst_bytes = inst->outer_size * inst->length * inst->inner_size * elem_size;
+
+    if (!sram_bounds_ok(inst->src_addr, src_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, dst_bytes))
+        return -1;
+
+    return npu_compute_slice(&ctx->engine->sram[inst->src_addr],
+                             &ctx->engine->sram[inst->dst_addr],
+                             inst->outer_size, inst->src_axis_size,
+                             inst->inner_size, inst->start,
+                             inst->length, inst->step, inst->flags);
+}
+
+static int handle_pad(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_pad_t *inst = &ctx->inst->pad;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+
+    uint16_t src_dims[4] = { inst->src_dim0, inst->src_dim1, inst->src_dim2, inst->src_dim3 };
+    uint16_t pad_before[4] = { inst->pad_before0, inst->pad_before1, inst->pad_before2, inst->pad_before3 };
+    uint16_t pad_after[4] = { inst->pad_after0, inst->pad_after1, inst->pad_after2, inst->pad_after3 };
+
+    uint32_t src_total = 1, dst_total = 1;
+    uint8_t d;
+    for (d = 0; d < inst->num_dims; d++) {
+        src_total *= src_dims[d];
+        dst_total *= (pad_before[d] + src_dims[d] + pad_after[d]);
+    }
+
+    if (!sram_bounds_ok(inst->src_addr, src_total * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, dst_total * elem_size))
+        return -1;
+
+    return npu_compute_pad(&ctx->engine->sram[inst->src_addr],
+                           &ctx->engine->sram[inst->dst_addr],
+                           src_dims, pad_before, pad_after,
+                           inst->num_dims, inst->pad_value, inst->flags);
+}
+
+static int handle_where(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_where_t *inst = &ctx->inst->where;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+
+    if (!sram_bounds_ok(inst->cond_addr, inst->num_elements))
+        return -1;
+    if (!sram_bounds_ok(inst->true_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->false_addr, inst->num_elements * elem_size))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, inst->num_elements * elem_size))
+        return -1;
+
+    return npu_compute_where(&ctx->engine->sram[inst->cond_addr],
+                             &ctx->engine->sram[inst->true_addr],
+                             &ctx->engine->sram[inst->false_addr],
+                             &ctx->engine->sram[inst->dst_addr],
+                             inst->num_elements, inst->flags);
+}
+
+/* ================================================================== */
 /* Opcode Dispatch Table                                              */
 /* ================================================================== */
 
@@ -1015,6 +1110,10 @@ static npu_handler_fn g_opcode_handlers[256] = {
     [NPU_OP_RESHAPE]   = handle_reshape,
     [NPU_OP_CONCAT]    = handle_concat,
     [NPU_OP_SPLIT]     = handle_split,
+    [NPU_OP_GATHER]    = handle_gather,
+    [NPU_OP_SLICE]     = handle_slice,
+    [NPU_OP_PAD]       = handle_pad,
+    [NPU_OP_WHERE]     = handle_where,
 
     /* 0xA0-0xAF: Attention */
     [NPU_OP_SCALED_DOT_PRODUCT_ATTENTION] = handle_sdpa,

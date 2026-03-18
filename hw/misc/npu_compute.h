@@ -273,4 +273,30 @@ int npu_compute_dequantize(const void* src, void* dst,
                            uint32_t num_elements, uint32_t num_channels,
                            uint8_t flags);
 
+/*
+ * Data Movement / Manipulation Operations
+ */
+
+/* GATHER: dst[outer][i][inner] = src[outer][indices[i]][inner] */
+int npu_compute_gather(const void* src, const void* indices, void* dst,
+                       uint32_t outer_size, uint32_t gather_size,
+                       uint32_t inner_size, uint32_t num_indices, uint8_t flags);
+
+/* SLICE: extract sub-tensor along one axis */
+int npu_compute_slice(const void* src, void* dst,
+                      uint32_t outer_size, uint32_t src_axis_size,
+                      uint32_t inner_size, uint32_t start,
+                      uint32_t length, uint32_t step, uint8_t flags);
+
+/* PAD: pad tensor with constant value (up to 4D) */
+int npu_compute_pad(const void* src, void* dst,
+                    const uint16_t* src_dims, const uint16_t* pad_before,
+                    const uint16_t* pad_after, uint8_t num_dims,
+                    uint32_t pad_value_bits, uint8_t flags);
+
+/* WHERE: dst[i] = cond[i] ? true_val[i] : false_val[i] */
+int npu_compute_where(const void* cond, const void* true_val,
+                      const void* false_val, void* dst,
+                      uint32_t num_elements, uint8_t flags);
+
 #endif /* NPU_COMPUTE_H */
