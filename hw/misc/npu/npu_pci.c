@@ -33,7 +33,7 @@
 #include "qemu/module.h"
 #include "qapi/visitor.h"
 
-#include "npu/npu_engine.h"
+#include "npu_engine.h"
 
 #define TYPE_PCI_EDU_DEVICE "edu"
 typedef struct EduState EduState;

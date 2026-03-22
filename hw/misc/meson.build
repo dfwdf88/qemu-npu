@@ -1,5 +1,5 @@
 system_ss.add(when: 'CONFIG_APPLESMC', if_true: files('applesmc.c'))
-system_ss.add(when: 'CONFIG_EDU', if_true: files('edu.c', 'npu_engine.c', 'npu_compute.c'))
+system_ss.add(when: 'CONFIG_EDU', if_true: files('edu.c', 'npu/npu_engine.c', 'npu/npu_compute.c'))
 system_ss.add(when: 'CONFIG_FW_CFG_DMA', if_true: files('vmcoreinfo.c'))
 system_ss.add(when: 'CONFIG_ISA_DEBUG', if_true: files('debugexit.c'))
 system_ss.add(when: 'CONFIG_ISA_TESTDEV', if_true: files('pc-testdev.c'))
