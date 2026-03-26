@@ -254,6 +254,51 @@ int npu_compute_sdpa(const void* Q, const void* K, const void* V, void* dst,
                      uint32_t head_dim, float scale, uint8_t flags);
 
 /*
+ * KV Cache Operations (VLM/VLA)
+ */
+
+/* KV_CACHE_APPEND: append new K/V vectors to cache at cur_seq_pos */
+int npu_compute_kv_cache_append(const void* k_new, const void* v_new,
+                                void* k_cache, void* v_cache,
+                                uint32_t cur_seq_pos, uint16_t num_kv_heads,
+                                uint16_t head_dim, uint32_t max_seq_len,
+                                uint8_t flags);
+
+/* KV_CACHE_ATTENTION: decode attention with cached K/V (seq_len_q=1) */
+int npu_compute_kv_cache_attention(const void* Q, const void* k_cache,
+                                   const void* v_cache, void* dst,
+                                   uint16_t num_heads, uint16_t num_kv_heads,
+                                   uint32_t cur_seq_len, uint16_t head_dim,
+                                   uint16_t max_seq_len, float scale,
+                                   uint8_t flags);
+
+/* KV_CACHE_RESET: zero cache memory */
+int npu_compute_kv_cache_reset(void* k_cache, void* v_cache,
+                               uint16_t num_kv_heads, uint16_t head_dim,
+                               uint32_t max_seq_len, uint8_t flags);
+
+/*
+ * Token Processing Operations (VLM/VLA)
+ */
+
+/* EMBEDDING_LOOKUP: dst = table[token_id] */
+int npu_compute_embedding_lookup(const void* table, void* dst,
+                                 uint32_t token_id, uint32_t vocab_size,
+                                 uint32_t embed_dim, uint8_t flags);
+
+/* TOKEN_SAMPLE: sample token from logits (greedy/top-k/top-p) */
+int npu_compute_token_sample(const void* logits, void* dst_token,
+                             uint32_t vocab_size, uint8_t mode,
+                             float temperature, uint16_t top_k,
+                             uint32_t seed, uint8_t flags);
+
+/* ROTARY_EMBEDDING: apply RoPE in-place */
+int npu_compute_rotary_embedding(const void* src, void* dst,
+                                 uint32_t position, uint16_t num_heads,
+                                 uint16_t head_dim, float theta_base,
+                                 uint8_t flags);
+
+/*
  * Data Type Operations
  */
 

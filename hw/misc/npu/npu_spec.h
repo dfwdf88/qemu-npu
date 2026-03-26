@@ -73,6 +73,7 @@ typedef enum {
     NPU_OP_REDUCE_MAX         = 0x72,  /* Max reduction along specified axis */
     NPU_OP_LOAD               = 0x80,  /* DMA transfer: host memory -> NPU local SRAM */
     NPU_OP_STORE              = 0x81,  /* DMA transfer: NPU local SRAM -> host memory */
+    NPU_OP_PREFETCH           = 0x82,  /* Async DMA transfer with prefetch hint: host memory -> NPU local SRAM (overlaps with compute) */
     NPU_OP_TRANSPOSE          = 0x90,  /* Tensor transpose (permute axes) */
     NPU_OP_RESHAPE            = 0x91,  /* Tensor reshape (metadata-only if contiguous) */
     NPU_OP_CONCAT             = 0x92,  /* Concatenate tensors along specified axis */
@@ -82,9 +83,15 @@ typedef enum {
     NPU_OP_PAD                = 0x96,  /* Pad tensor with constant value */
     NPU_OP_WHERE              = 0x97,  /* Element-wise conditional select: dst[i] = cond[i] ? true[i] : false[i] */
     NPU_OP_SCALED_DOT_PRODUCT_ATTENTION = 0xA0,  /* Scaled dot-product attention: dst = softmax(Q @ K^T / sqrt(d)) @ V */
+    NPU_OP_KV_CACHE_APPEND    = 0xA1,  /* Append new K/V vectors to KV cache at current sequence position */
+    NPU_OP_KV_CACHE_ATTENTION = 0xA2,  /* Decode-phase attention using cached K/V: dst = softmax(Q @ K_cache^T / scale) @ V_cache, where seq_len_q=1 */
+    NPU_OP_KV_CACHE_RESET     = 0xA3,  /* Reset KV cache region for a new sequence (metadata-only, zeroes position counter) */
     NPU_OP_CAST               = 0xB0,  /* Data type cast: convert elements between fp32/fp16/int8 */
     NPU_OP_QUANTIZE           = 0xB1,  /* Quantize fp32 to int8: dst = clamp(round(src / scale) + zero_point) */
     NPU_OP_DEQUANTIZE         = 0xB2,  /* Dequantize int8 to fp32: dst = (src - zero_point) * scale */
+    NPU_OP_EMBEDDING_LOOKUP   = 0xC0,  /* Read a row from embedding table by token ID: dst = table[token_id] */
+    NPU_OP_TOKEN_SAMPLE       = 0xC1,  /* Sample a token from logits vector with temperature and top-k/top-p filtering */
+    NPU_OP_ROTARY_EMBEDDING   = 0xC2,  /* Apply Rotary Position Embedding (RoPE) to Q or K vectors in-place */
 } npu_opcode_t;
 
 /* ================================================================== */
@@ -449,6 +456,67 @@ typedef struct __attribute__((packed)) {
 
 _Static_assert(sizeof(npu_inst_scaled_dot_product_attention_t) == NPU_INST_SIZE,
               "npu_inst_scaled_dot_product_attention_t must be 64 bytes");
+
+/* Append new K/V vectors to KV cache at current sequence position */
+typedef struct __attribute__((packed)) {
+    uint8_t opcode;                      /* +0x00: Opcode (0xA1) */
+    uint8_t sub_opcode;                  /* +0x01: Sub-opcode */
+    uint8_t flags;                       /* +0x02: [0]=fp16 [1]=grouped_query_attention */
+    uint8_t reserved0;                   /* +0x03: Reserved */
+    uint32_t reserved1;                  /* +0x04: Reserved */
+    uint64_t k_new_addr;                 /* +0x08: NPU-local address of new K vector (num_kv_heads × head_dim) */
+    uint64_t v_new_addr;                 /* +0x10: NPU-local address of new V vector (num_kv_heads × head_dim) */
+    uint64_t k_cache_addr;               /* +0x18: NPU-local base address of K cache (num_kv_heads × max_seq_len × head_dim) */
+    uint64_t v_cache_addr;               /* +0x20: NPU-local base address of V cache (num_kv_heads × max_seq_len × head_dim) */
+    uint32_t cur_seq_pos;                /* +0x28: Current write position in cache (0-based) */
+    uint16_t num_kv_heads;               /* +0x2C: Number of KV heads (may differ from Q heads in GQA) */
+    uint16_t head_dim;                   /* +0x2E: Dimension per head */
+    uint32_t max_seq_len;                /* +0x30: Maximum cache capacity (sequence length) */
+    uint8_t reserved_pad[12];            /* +0x34: Padding to 64 bytes */
+} npu_inst_kv_cache_append_t;
+
+_Static_assert(sizeof(npu_inst_kv_cache_append_t) == NPU_INST_SIZE,
+              "npu_inst_kv_cache_append_t must be 64 bytes");
+
+/* Decode-phase attention using cached K/V: dst = softmax(Q @ K_cache^T / scale) @ V_cache, where seq_len_q=1 */
+typedef struct __attribute__((packed)) {
+    uint8_t opcode;                      /* +0x00: Opcode (0xA2) */
+    uint8_t sub_opcode;                  /* +0x01: Sub-opcode */
+    uint8_t flags;                       /* +0x02: [0]=fp16 [1]=causal_mask */
+    uint8_t reserved0;                   /* +0x03: Reserved */
+    uint32_t scale_fp32;                 /* +0x04: Scale factor (fp32 bit pattern), 0 = auto (1/sqrt(head_dim)) */
+    uint64_t q_addr;                     /* +0x08: NPU-local address of Q (num_heads × 1 × head_dim) */
+    uint64_t k_cache_addr;               /* +0x10: NPU-local base address of K cache */
+    uint64_t v_cache_addr;               /* +0x18: NPU-local base address of V cache */
+    uint64_t dst_addr;                   /* +0x20: NPU-local address of output (num_heads × 1 × head_dim) */
+    uint16_t num_heads;                  /* +0x28: Number of query heads */
+    uint16_t num_kv_heads;               /* +0x2A: Number of KV heads (for GQA: repeat if num_heads > num_kv_heads) */
+    uint32_t cur_seq_len;                /* +0x2C: Valid cache length (number of tokens cached so far) */
+    uint16_t head_dim;                   /* +0x30: Dimension per head */
+    uint16_t max_seq_len;                /* +0x32: Maximum cache capacity */
+    uint8_t reserved_pad[12];            /* +0x34: Padding to 64 bytes */
+} npu_inst_kv_cache_attention_t;
+
+_Static_assert(sizeof(npu_inst_kv_cache_attention_t) == NPU_INST_SIZE,
+              "npu_inst_kv_cache_attention_t must be 64 bytes");
+
+/* Reset KV cache region for a new sequence (metadata-only, zeroes position counter) */
+typedef struct __attribute__((packed)) {
+    uint8_t opcode;                      /* +0x00: Opcode (0xA3) */
+    uint8_t sub_opcode;                  /* +0x01: Sub-opcode */
+    uint8_t flags;                       /* +0x02: [0]=zero_memory (also zero cache contents) */
+    uint8_t reserved0;                   /* +0x03: Reserved */
+    uint32_t reserved1;                  /* +0x04: Reserved */
+    uint64_t k_cache_addr;               /* +0x08: NPU-local base address of K cache */
+    uint64_t v_cache_addr;               /* +0x10: NPU-local base address of V cache */
+    uint16_t num_kv_heads;               /* +0x18: Number of KV heads */
+    uint16_t head_dim;                   /* +0x1A: Dimension per head */
+    uint32_t max_seq_len;                /* +0x1C: Maximum cache capacity */
+    uint8_t reserved_pad[32];            /* +0x20: Padding to 64 bytes */
+} npu_inst_kv_cache_reset_t;
+
+_Static_assert(sizeof(npu_inst_kv_cache_reset_t) == NPU_INST_SIZE,
+              "npu_inst_kv_cache_reset_t must be 64 bytes");
 
 /* ================================================================== */
 /* CONTROL Instructions                                   */
@@ -874,6 +942,23 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(npu_inst_store_t) == NPU_INST_SIZE,
               "npu_inst_store_t must be 64 bytes");
 
+/* Async DMA transfer with prefetch hint: host memory -> NPU local SRAM (overlaps with compute) */
+typedef struct __attribute__((packed)) {
+    uint8_t opcode;                      /* +0x00: Opcode (0x82) */
+    uint8_t sub_opcode;                  /* +0x01: Sub-opcode for future variants */
+    uint8_t flags;                       /* +0x02: [0]=async [1]=notify_on_complete [2]=prefetch_hint */
+    uint8_t tag;                         /* +0x03: Prefetch tag for tracking completion (0-255) */
+    uint32_t reserved1;                  /* +0x04: Reserved */
+    uint64_t host_addr;                  /* +0x08: Host physical/IOVA address (source) */
+    uint64_t npu_addr;                   /* +0x10: NPU-local SRAM address (destination) */
+    uint32_t size_bytes;                 /* +0x18: Number of bytes to transfer */
+    uint32_t reserved2;                  /* +0x1C: Reserved */
+    uint8_t reserved_pad[32];            /* +0x20: Padding to 64 bytes */
+} npu_inst_prefetch_t;
+
+_Static_assert(sizeof(npu_inst_prefetch_t) == NPU_INST_SIZE,
+              "npu_inst_prefetch_t must be 64 bytes");
+
 /* ================================================================== */
 /* NORMALIZATION Instructions                                   */
 /* ================================================================== */
@@ -1085,6 +1170,64 @@ _Static_assert(sizeof(npu_inst_reduce_max_t) == NPU_INST_SIZE,
               "npu_inst_reduce_max_t must be 64 bytes");
 
 /* ================================================================== */
+/* TOKEN Instructions                                   */
+/* ================================================================== */
+
+/* Read a row from embedding table by token ID: dst = table[token_id] */
+typedef struct __attribute__((packed)) {
+    uint8_t opcode;                      /* +0x00: Opcode (0xC0) */
+    uint8_t sub_opcode;                  /* +0x01: Sub-opcode */
+    uint8_t flags;                       /* +0x02: [0]=fp16 */
+    uint8_t reserved0;                   /* +0x03: Reserved */
+    uint32_t token_id;                   /* +0x04: Input token ID (index into embedding table) */
+    uint64_t table_addr;                 /* +0x08: NPU-local base address of embedding table (vocab_size × embed_dim) */
+    uint64_t dst_addr;                   /* +0x10: NPU-local address of output embedding vector (embed_dim) */
+    uint32_t vocab_size;                 /* +0x18: Number of entries in embedding table */
+    uint32_t embed_dim;                  /* +0x1C: Dimension of each embedding vector */
+    uint8_t reserved_pad[32];            /* +0x20: Padding to 64 bytes */
+} npu_inst_embedding_lookup_t;
+
+_Static_assert(sizeof(npu_inst_embedding_lookup_t) == NPU_INST_SIZE,
+              "npu_inst_embedding_lookup_t must be 64 bytes");
+
+/* Sample a token from logits vector with temperature and top-k/top-p filtering */
+typedef struct __attribute__((packed)) {
+    uint8_t opcode;                      /* +0x00: Opcode (0xC1) */
+    uint8_t sub_opcode;                  /* +0x01: 0=greedy(argmax) 1=top_k 2=top_p */
+    uint8_t flags;                       /* +0x02: [0]=fp16 */
+    uint8_t reserved0;                   /* +0x03: Reserved */
+    uint32_t temperature_fp32;           /* +0x04: Temperature (fp32 bit pattern), 0 = greedy */
+    uint64_t logits_addr;                /* +0x08: NPU-local address of logits vector (vocab_size) */
+    uint64_t dst_token_addr;             /* +0x10: NPU-local address to write sampled token ID (u32) */
+    uint32_t vocab_size;                 /* +0x18: Size of logits vector */
+    uint16_t top_k;                      /* +0x1C: Top-k value (0 = disabled) */
+    uint16_t reserved1;                  /* +0x1E: Reserved */
+    uint32_t seed;                       /* +0x20: RNG seed for reproducibility (0 = non-deterministic) */
+    uint8_t reserved_pad[28];            /* +0x24: Padding to 64 bytes */
+} npu_inst_token_sample_t;
+
+_Static_assert(sizeof(npu_inst_token_sample_t) == NPU_INST_SIZE,
+              "npu_inst_token_sample_t must be 64 bytes");
+
+/* Apply Rotary Position Embedding (RoPE) to Q or K vectors in-place */
+typedef struct __attribute__((packed)) {
+    uint8_t opcode;                      /* +0x00: Opcode (0xC2) */
+    uint8_t sub_opcode;                  /* +0x01: Sub-opcode */
+    uint8_t flags;                       /* +0x02: [0]=fp16 [1]=neox_style (GPT-NeoX interleave) */
+    uint8_t reserved0;                   /* +0x03: Reserved */
+    uint32_t position;                   /* +0x04: Sequence position for frequency computation */
+    uint64_t src_addr;                   /* +0x08: NPU-local address of input Q or K (num_heads × head_dim) */
+    uint64_t dst_addr;                   /* +0x10: NPU-local address of output (can be same as src for in-place) */
+    uint16_t num_heads;                  /* +0x18: Number of heads */
+    uint16_t head_dim;                   /* +0x1A: Dimension per head (must be even) */
+    uint32_t theta_base_fp32;            /* +0x1C: Base frequency (fp32 bit pattern), typically 10000.0 */
+    uint8_t reserved_pad[32];            /* +0x20: Padding to 64 bytes */
+} npu_inst_rotary_embedding_t;
+
+_Static_assert(sizeof(npu_inst_rotary_embedding_t) == NPU_INST_SIZE,
+              "npu_inst_rotary_embedding_t must be 64 bytes");
+
+/* ================================================================== */
 /* Generic Instruction (for fetch/decode)                             */
 /* ================================================================== */
 typedef union __attribute__((packed)) {
@@ -1128,6 +1271,7 @@ typedef union __attribute__((packed)) {
     npu_inst_reduce_max_t                reduce_max;
     npu_inst_load_t                      load;
     npu_inst_store_t                     store;
+    npu_inst_prefetch_t                  prefetch;
     npu_inst_transpose_t                 transpose;
     npu_inst_reshape_t                   reshape;
     npu_inst_concat_t                    concat;
@@ -1137,14 +1281,20 @@ typedef union __attribute__((packed)) {
     npu_inst_pad_t                       pad;
     npu_inst_where_t                     where;
     npu_inst_scaled_dot_product_attention_t scaled_dot_product_attention;
+    npu_inst_kv_cache_append_t           kv_cache_append;
+    npu_inst_kv_cache_attention_t        kv_cache_attention;
+    npu_inst_kv_cache_reset_t            kv_cache_reset;
     npu_inst_cast_t                      cast;
     npu_inst_quantize_t                  quantize;
     npu_inst_dequantize_t                dequantize;
+    npu_inst_embedding_lookup_t          embedding_lookup;
+    npu_inst_token_sample_t              token_sample;
+    npu_inst_rotary_embedding_t          rotary_embedding;
 } npu_inst_t;
 
 _Static_assert(sizeof(npu_inst_t) == NPU_INST_SIZE,
               "npu_inst_t must be 64 bytes");
 
-#define NPU_OPCODE_COUNT 50
+#define NPU_OPCODE_COUNT 57
 
 #endif /* UNAF_NPU_SPEC_H */

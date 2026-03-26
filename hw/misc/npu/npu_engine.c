@@ -1040,6 +1040,153 @@ static int handle_where(npu_exec_ctx_t *ctx)
 }
 
 /* ================================================================== */
+/* VLM/VLA Instruction Handlers                                       */
+/* ================================================================== */
+
+static int handle_prefetch(npu_exec_ctx_t *ctx)
+{
+    /* PREFETCH behaves like LOAD in emulation (no async overlap) */
+    const npu_inst_prefetch_t *inst = &ctx->inst->prefetch;
+    if (!sram_bounds_ok(inst->npu_addr, inst->size_bytes))
+        return -1;
+    return ctx->dma_read(ctx->opaque, inst->host_addr,
+                         &ctx->engine->sram[inst->npu_addr], inst->size_bytes);
+}
+
+static int handle_kv_cache_append(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_kv_cache_append_t *inst = &ctx->inst->kv_cache_append;
+    uint16_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    uint32_t kv_vec_bytes = inst->num_kv_heads * inst->head_dim * elem_size;
+    uint32_t cache_bytes = inst->num_kv_heads * inst->max_seq_len * inst->head_dim * elem_size;
+
+    if (!sram_bounds_ok(inst->k_new_addr, kv_vec_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->v_new_addr, kv_vec_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->k_cache_addr, cache_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->v_cache_addr, cache_bytes))
+        return -1;
+
+    return npu_compute_kv_cache_append(
+        &ctx->engine->sram[inst->k_new_addr],
+        &ctx->engine->sram[inst->v_new_addr],
+        &ctx->engine->sram[inst->k_cache_addr],
+        &ctx->engine->sram[inst->v_cache_addr],
+        inst->cur_seq_pos, inst->num_kv_heads, inst->head_dim,
+        inst->max_seq_len, inst->flags);
+}
+
+static int handle_kv_cache_attention(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_kv_cache_attention_t *inst = &ctx->inst->kv_cache_attention;
+    uint16_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    uint32_t q_bytes = inst->num_heads * inst->head_dim * elem_size;
+    uint32_t cache_bytes = inst->num_kv_heads * inst->max_seq_len * inst->head_dim * elem_size;
+
+    if (!sram_bounds_ok(inst->q_addr, q_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->k_cache_addr, cache_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->v_cache_addr, cache_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, q_bytes))
+        return -1;
+
+    float scale;
+    memcpy(&scale, &inst->scale_fp32, sizeof(float));
+    if (scale == 0.0f)
+        scale = 1.0f / sqrtf((float)inst->head_dim);
+
+    return npu_compute_kv_cache_attention(
+        &ctx->engine->sram[inst->q_addr],
+        &ctx->engine->sram[inst->k_cache_addr],
+        &ctx->engine->sram[inst->v_cache_addr],
+        &ctx->engine->sram[inst->dst_addr],
+        inst->num_heads, inst->num_kv_heads, inst->cur_seq_len,
+        inst->head_dim, inst->max_seq_len, scale, inst->flags);
+}
+
+static int handle_kv_cache_reset(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_kv_cache_reset_t *inst = &ctx->inst->kv_cache_reset;
+    uint32_t cache_bytes = inst->num_kv_heads * inst->max_seq_len * inst->head_dim * 2;
+
+    if (!sram_bounds_ok(inst->k_cache_addr, cache_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->v_cache_addr, cache_bytes))
+        return -1;
+
+    return npu_compute_kv_cache_reset(
+        &ctx->engine->sram[inst->k_cache_addr],
+        &ctx->engine->sram[inst->v_cache_addr],
+        inst->num_kv_heads, inst->head_dim, inst->max_seq_len, inst->flags);
+}
+
+static int handle_embedding_lookup(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_embedding_lookup_t *inst = &ctx->inst->embedding_lookup;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    uint32_t table_bytes = inst->vocab_size * inst->embed_dim * elem_size;
+    uint32_t row_bytes = inst->embed_dim * elem_size;
+
+    if (!sram_bounds_ok(inst->table_addr, table_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, row_bytes))
+        return -1;
+
+    return npu_compute_embedding_lookup(
+        &ctx->engine->sram[inst->table_addr],
+        &ctx->engine->sram[inst->dst_addr],
+        inst->token_id, inst->vocab_size, inst->embed_dim, inst->flags);
+}
+
+static int handle_token_sample(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_token_sample_t *inst = &ctx->inst->token_sample;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    uint32_t logits_bytes = inst->vocab_size * elem_size;
+
+    if (!sram_bounds_ok(inst->logits_addr, logits_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_token_addr, 4))
+        return -1;
+
+    float temperature;
+    memcpy(&temperature, &inst->temperature_fp32, sizeof(float));
+
+    return npu_compute_token_sample(
+        &ctx->engine->sram[inst->logits_addr],
+        &ctx->engine->sram[inst->dst_token_addr],
+        inst->vocab_size, inst->sub_opcode, temperature,
+        inst->top_k, inst->seed, inst->flags);
+}
+
+static int handle_rotary_embedding(npu_exec_ctx_t *ctx)
+{
+    const npu_inst_rotary_embedding_t *inst = &ctx->inst->rotary_embedding;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    uint32_t total_bytes = inst->num_heads * inst->head_dim * elem_size;
+
+    if (!sram_bounds_ok(inst->src_addr, total_bytes))
+        return -1;
+    if (!sram_bounds_ok(inst->dst_addr, total_bytes))
+        return -1;
+
+    float theta_base;
+    memcpy(&theta_base, &inst->theta_base_fp32, sizeof(float));
+    if (theta_base == 0.0f)
+        theta_base = 10000.0f;
+
+    return npu_compute_rotary_embedding(
+        &ctx->engine->sram[inst->src_addr],
+        &ctx->engine->sram[inst->dst_addr],
+        inst->position, inst->num_heads, inst->head_dim,
+        theta_base, inst->flags);
+}
+
+/* ================================================================== */
 /* Opcode Dispatch Table                                              */
 /* ================================================================== */
 
@@ -1102,8 +1249,9 @@ static npu_handler_fn g_opcode_handlers[256] = {
     [NPU_OP_REDUCE_MAX]  = handle_reduce_max,
 
     /* 0x80-0x8F: Memory */
-    [NPU_OP_LOAD]  = handle_load,
-    [NPU_OP_STORE] = handle_store,
+    [NPU_OP_LOAD]     = handle_load,
+    [NPU_OP_STORE]    = handle_store,
+    [NPU_OP_PREFETCH] = handle_prefetch,
 
     /* 0x90-0x9F: Layout */
     [NPU_OP_TRANSPOSE] = handle_transpose,
@@ -1117,11 +1265,19 @@ static npu_handler_fn g_opcode_handlers[256] = {
 
     /* 0xA0-0xAF: Attention */
     [NPU_OP_SCALED_DOT_PRODUCT_ATTENTION] = handle_sdpa,
+    [NPU_OP_KV_CACHE_APPEND]    = handle_kv_cache_append,
+    [NPU_OP_KV_CACHE_ATTENTION] = handle_kv_cache_attention,
+    [NPU_OP_KV_CACHE_RESET]     = handle_kv_cache_reset,
 
     /* 0xB0-0xBF: Data Type */
     [NPU_OP_CAST]       = handle_cast,
     [NPU_OP_QUANTIZE]   = handle_quantize,
     [NPU_OP_DEQUANTIZE] = handle_dequantize,
+
+    /* 0xC0-0xCF: Token */
+    [NPU_OP_EMBEDDING_LOOKUP]  = handle_embedding_lookup,
+    [NPU_OP_TOKEN_SAMPLE]      = handle_token_sample,
+    [NPU_OP_ROTARY_EMBEDDING]  = handle_rotary_embedding,
 };
 
 /* ================================================================== */

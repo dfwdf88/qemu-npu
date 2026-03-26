@@ -2257,3 +2257,203 @@ int npu_compute_where(const void* cond, const void* true_val,
     }
     return 0;
 }
+
+/* ================================================================== */
+/* KV Cache Operations                                                */
+/* ================================================================== */
+
+int npu_compute_kv_cache_append(const void* k_new, const void* v_new,
+                                void* k_cache, void* v_cache,
+                                uint32_t cur_seq_pos, uint16_t num_kv_heads,
+                                uint16_t head_dim, uint32_t max_seq_len,
+                                uint8_t flags)
+{
+    uint32_t h;
+    uint32_t elem_size = (flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    uint32_t row_bytes = head_dim * elem_size;
+
+    if (!k_new || !v_new || !k_cache || !v_cache)
+        return -1;
+    if (cur_seq_pos >= max_seq_len)
+        return -2;
+
+    /* Cache layout: (num_kv_heads, max_seq_len, head_dim) row-major */
+    for (h = 0; h < num_kv_heads; h++) {
+        uint32_t cache_offset = (h * max_seq_len + cur_seq_pos) * row_bytes;
+        uint32_t new_offset = h * row_bytes;
+        memcpy((uint8_t*)k_cache + cache_offset, (const uint8_t*)k_new + new_offset, row_bytes);
+        memcpy((uint8_t*)v_cache + cache_offset, (const uint8_t*)v_new + new_offset, row_bytes);
+    }
+    return 0;
+}
+
+int npu_compute_kv_cache_attention(const void* Q, const void* k_cache,
+                                   const void* v_cache, void* dst,
+                                   uint16_t num_heads, uint16_t num_kv_heads,
+                                   uint32_t cur_seq_len, uint16_t head_dim,
+                                   uint16_t max_seq_len, float scale,
+                                   uint8_t flags)
+{
+    uint32_t h, s, d;
+    uint32_t gqa_ratio;
+    float score, max_score, sum_exp;
+
+    if (!Q || !k_cache || !v_cache || !dst)
+        return -1;
+    if (cur_seq_len == 0 || num_kv_heads == 0)
+        return -2;
+
+    gqa_ratio = num_heads / num_kv_heads;
+
+    /* For each query head */
+    for (h = 0; h < num_heads; h++) {
+        uint32_t kv_h = h / gqa_ratio;  /* GQA mapping */
+
+        /* Q: (num_heads, head_dim), single token */
+        /* K cache: (num_kv_heads, max_seq_len, head_dim) */
+
+        /* Compute attention scores: Q[h] @ K_cache[kv_h, :cur_seq_len]^T */
+        float *scores = (float*)alloca(cur_seq_len * sizeof(float));
+
+        max_score = -1e30f;
+        for (s = 0; s < cur_seq_len; s++) {
+            score = 0.0f;
+            for (d = 0; d < (uint32_t)head_dim; d++) {
+                float q_val = npu_fp16_to_fp32(((const uint16_t*)Q)[h * head_dim + d]);
+                uint32_t k_idx = (kv_h * max_seq_len + s) * head_dim + d;
+                float k_val = npu_fp16_to_fp32(((const uint16_t*)k_cache)[k_idx]);
+                score += q_val * k_val;
+            }
+            score *= scale;
+            scores[s] = score;
+            if (score > max_score) max_score = score;
+        }
+
+        /* Softmax */
+        sum_exp = 0.0f;
+        for (s = 0; s < cur_seq_len; s++) {
+            scores[s] = expf(scores[s] - max_score);
+            sum_exp += scores[s];
+        }
+        for (s = 0; s < cur_seq_len; s++) {
+            scores[s] /= sum_exp;
+        }
+
+        /* Output = attn @ V_cache[kv_h, :cur_seq_len] */
+        for (d = 0; d < (uint32_t)head_dim; d++) {
+            float val = 0.0f;
+            for (s = 0; s < cur_seq_len; s++) {
+                uint32_t v_idx = (kv_h * max_seq_len + s) * head_dim + d;
+                float v_val = npu_fp16_to_fp32(((const uint16_t*)v_cache)[v_idx]);
+                val += scores[s] * v_val;
+            }
+            ((uint16_t*)dst)[h * head_dim + d] = npu_fp32_to_fp16(val);
+        }
+    }
+    return 0;
+}
+
+int npu_compute_kv_cache_reset(void* k_cache, void* v_cache,
+                               uint16_t num_kv_heads, uint16_t head_dim,
+                               uint32_t max_seq_len, uint8_t flags)
+{
+    if (!k_cache || !v_cache)
+        return -1;
+
+    if (flags & 0x01) {  /* zero_memory flag */
+        uint32_t total = num_kv_heads * max_seq_len * head_dim * 2;  /* fp16 */
+        memset(k_cache, 0, total);
+        memset(v_cache, 0, total);
+    }
+    return 0;
+}
+
+/* ================================================================== */
+/* Token Processing Operations                                        */
+/* ================================================================== */
+
+int npu_compute_embedding_lookup(const void* table, void* dst,
+                                 uint32_t token_id, uint32_t vocab_size,
+                                 uint32_t embed_dim, uint8_t flags)
+{
+    uint32_t elem_size;
+
+    if (!table || !dst)
+        return -1;
+    if (token_id >= vocab_size)
+        return -2;
+
+    elem_size = (flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    memcpy(dst, (const uint8_t*)table + token_id * embed_dim * elem_size,
+           embed_dim * elem_size);
+    return 0;
+}
+
+int npu_compute_token_sample(const void* logits, void* dst_token,
+                             uint32_t vocab_size, uint8_t mode,
+                             float temperature, uint16_t top_k,
+                             uint32_t seed, uint8_t flags)
+{
+    uint32_t i, best_idx;
+    float best_val;
+
+    if (!logits || !dst_token)
+        return -1;
+    if (vocab_size == 0)
+        return -2;
+
+    /* Greedy (argmax) — sufficient for functional emulation */
+    best_idx = 0;
+    best_val = (flags & NPU_COMPUTE_FLAG_FP16)
+        ? npu_fp16_to_fp32(((const uint16_t*)logits)[0])
+        : ((const float*)logits)[0];
+
+    for (i = 1; i < vocab_size; i++) {
+        float val = (flags & NPU_COMPUTE_FLAG_FP16)
+            ? npu_fp16_to_fp32(((const uint16_t*)logits)[i])
+            : ((const float*)logits)[i];
+        if (val > best_val) {
+            best_val = val;
+            best_idx = i;
+        }
+    }
+
+    /* Write token ID as u32 */
+    *(uint32_t*)dst_token = best_idx;
+    return 0;
+}
+
+int npu_compute_rotary_embedding(const void* src, void* dst,
+                                 uint32_t position, uint16_t num_heads,
+                                 uint16_t head_dim, float theta_base,
+                                 uint8_t flags)
+{
+    uint32_t h, d;
+    uint32_t half_dim;
+
+    if (!src || !dst)
+        return -1;
+    if (head_dim % 2 != 0)
+        return -2;
+
+    half_dim = head_dim / 2;
+
+    for (h = 0; h < num_heads; h++) {
+        for (d = 0; d < half_dim; d++) {
+            float freq = 1.0f / powf(theta_base, (float)(2 * d) / (float)head_dim);
+            float angle = (float)position * freq;
+            float cos_a = cosf(angle);
+            float sin_a = sinf(angle);
+
+            uint32_t idx0 = h * head_dim + d * 2;
+            uint32_t idx1 = h * head_dim + d * 2 + 1;
+
+            float x0 = npu_fp16_to_fp32(((const uint16_t*)src)[idx0]);
+            float x1 = npu_fp16_to_fp32(((const uint16_t*)src)[idx1]);
+
+            ((uint16_t*)dst)[idx0] = npu_fp32_to_fp16(x0 * cos_a - x1 * sin_a);
+            ((uint16_t*)dst)[idx1] = npu_fp32_to_fp16(x0 * sin_a + x1 * cos_a);
+        }
+    }
+    return 0;
+}
