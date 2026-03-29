@@ -1301,7 +1301,14 @@ int npu_engine_run(npu_engine_t *engine,
     num_insts = program_size / NPU_INST_BYTES;
     npu_engine_reset(engine);
 
+    #define NPU_MAX_ITERATIONS 10000000  /* Safety limit: 10M instructions */
+    uint32_t iterations = 0;
+
     while (engine->pc < num_insts && !engine->halted) {
+        if (++iterations > NPU_MAX_ITERATIONS) {
+            engine->error = 1;
+            return -1;
+        }
         const npu_inst_t *inst =
             (const npu_inst_t *)&program[engine->pc * NPU_INST_BYTES];
 

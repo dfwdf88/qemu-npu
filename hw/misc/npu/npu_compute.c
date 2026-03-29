@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
 
 /* ========================================
  * fp16 <-> fp32 conversion (IEEE 754)
@@ -2313,7 +2314,7 @@ int npu_compute_kv_cache_attention(const void* Q, const void* k_cache,
         /* K cache: (num_kv_heads, max_seq_len, head_dim) */
 
         /* Compute attention scores: Q[h] @ K_cache[kv_h, :cur_seq_len]^T */
-        float *scores = (float*)alloca(cur_seq_len * sizeof(float));
+        float *scores = (float*)malloc(cur_seq_len * sizeof(float));
 
         max_score = -1e30f;
         for (s = 0; s < cur_seq_len; s++) {
@@ -2349,6 +2350,7 @@ int npu_compute_kv_cache_attention(const void* Q, const void* k_cache,
             }
             ((uint16_t*)dst)[h * head_dim + d] = npu_fp32_to_fp16(val);
         }
+        free(scores);
     }
     return 0;
 }
