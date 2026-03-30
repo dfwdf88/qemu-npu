@@ -157,6 +157,16 @@ static int handle_gemm(lpu_exec_ctx_t *ctx)
     float alpha = npu_fp16_to_fp32(inst->alpha_fp16);
     float beta = npu_fp16_to_fp32(inst->beta_fp16);
 
+    /* npu_compute_gemm reads old C from dst (in-place).
+     * If bias is at a separate address, copy it to dst first. */
+    if ((inst->flags & LPU_GEMM_FLAG_HAS_BIAS) && inst->bias_addr != inst->dst_addr) {
+        uint32_t c_size = inst->m * inst->n * elem_size;
+        if (!sram_bounds_ok(inst->bias_addr, c_size))
+            return -1;
+        memcpy(&ctx->engine->sram[inst->dst_addr],
+               &ctx->engine->sram[inst->bias_addr], c_size);
+    }
+
     return npu_compute_gemm(&ctx->engine->sram[inst->src_a_addr],
                              &ctx->engine->sram[inst->src_b_addr],
                              &ctx->engine->sram[inst->dst_addr],

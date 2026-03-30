@@ -78,7 +78,14 @@ uint16_t npu_fp32_to_fp16(float f)
         return (uint16_t)sign;
     }
 
-    return (uint16_t)(sign | ((uint32_t)new_exp << 10) | (mant >> 13));
+    /* Round to nearest even */
+    uint32_t round_bit = (mant >> 12) & 1;
+    uint32_t sticky = mant & 0xFFF;
+    uint16_t result = (uint16_t)(sign | ((uint32_t)new_exp << 10) | (mant >> 13));
+    if (round_bit && (sticky || (result & 1))) {
+        result++;
+    }
+    return result;
 }
 
 /* ========================================
@@ -1808,27 +1815,52 @@ int npu_compute_rmsnorm(const void* src, const void* weight, void* dst,
                         float epsilon, uint8_t flags)
 {
     uint32_t b, i;
+    int fp16 = (flags & NPU_COMPUTE_FLAG_FP16) != 0;
+
     if (!src || !dst)
         return -1;
 
-    const float *sf = (const float *)src;
-    const float *wf = (const float *)weight;
-    float *df = (float *)dst;
+    if (fp16) {
+        const uint16_t *sh = (const uint16_t *)src;
+        const uint16_t *wh = weight ? (const uint16_t *)weight : NULL;
+        uint16_t *dh = (uint16_t *)dst;
 
-    for (b = 0; b < batch_size; b++) {
-        const float *row = &sf[b * normalized_shape];
-        float *out = &df[b * normalized_shape];
+        for (b = 0; b < batch_size; b++) {
+            float sum_sq = 0.0f;
+            for (i = 0; i < normalized_shape; i++) {
+                float x = npu_fp16_to_fp32(sh[b * normalized_shape + i]);
+                sum_sq += x * x;
+            }
+            float rms = sqrtf(sum_sq / normalized_shape + epsilon);
 
-        float sum_sq = 0.0f;
-        for (i = 0; i < normalized_shape; i++)
-            sum_sq += row[i] * row[i];
-        float rms = sqrtf(sum_sq / normalized_shape + epsilon);
+            for (i = 0; i < normalized_shape; i++) {
+                float x = npu_fp16_to_fp32(sh[b * normalized_shape + i]);
+                float val = x / rms;
+                if (wh)
+                    val *= npu_fp16_to_fp32(wh[i]);
+                dh[b * normalized_shape + i] = npu_fp32_to_fp16(val);
+            }
+        }
+    } else {
+        const float *sf = (const float *)src;
+        const float *wf = (const float *)weight;
+        float *df = (float *)dst;
 
-        for (i = 0; i < normalized_shape; i++) {
-            float val = row[i] / rms;
-            if (wf)
-                val *= wf[i];
-            out[i] = val;
+        for (b = 0; b < batch_size; b++) {
+            const float *row = &sf[b * normalized_shape];
+            float *out = &df[b * normalized_shape];
+
+            float sum_sq = 0.0f;
+            for (i = 0; i < normalized_shape; i++)
+                sum_sq += row[i] * row[i];
+            float rms = sqrtf(sum_sq / normalized_shape + epsilon);
+
+            for (i = 0; i < normalized_shape; i++) {
+                float val = row[i] / rms;
+                if (wf)
+                    val *= wf[i];
+                out[i] = val;
+            }
         }
     }
     return 0;
@@ -2440,6 +2472,8 @@ int npu_compute_rotary_embedding(const void* src, void* dst,
 
     half_dim = head_dim / 2;
 
+    int fp16 = (flags & NPU_COMPUTE_FLAG_FP16) != 0;
+
     for (h = 0; h < num_heads; h++) {
         for (d = 0; d < half_dim; d++) {
             float freq = 1.0f / powf(theta_base, (float)(2 * d) / (float)head_dim);
@@ -2450,11 +2484,25 @@ int npu_compute_rotary_embedding(const void* src, void* dst,
             uint32_t idx0 = h * head_dim + d * 2;
             uint32_t idx1 = h * head_dim + d * 2 + 1;
 
-            float x0 = npu_fp16_to_fp32(((const uint16_t*)src)[idx0]);
-            float x1 = npu_fp16_to_fp32(((const uint16_t*)src)[idx1]);
+            float x0, x1;
+            if (fp16) {
+                x0 = npu_fp16_to_fp32(((const uint16_t*)src)[idx0]);
+                x1 = npu_fp16_to_fp32(((const uint16_t*)src)[idx1]);
+            } else {
+                x0 = ((const float*)src)[idx0];
+                x1 = ((const float*)src)[idx1];
+            }
 
-            ((uint16_t*)dst)[idx0] = npu_fp32_to_fp16(x0 * cos_a - x1 * sin_a);
-            ((uint16_t*)dst)[idx1] = npu_fp32_to_fp16(x0 * sin_a + x1 * cos_a);
+            float r0 = x0 * cos_a - x1 * sin_a;
+            float r1 = x0 * sin_a + x1 * cos_a;
+
+            if (fp16) {
+                ((uint16_t*)dst)[idx0] = npu_fp32_to_fp16(r0);
+                ((uint16_t*)dst)[idx1] = npu_fp32_to_fp16(r1);
+            } else {
+                ((float*)dst)[idx0] = r0;
+                ((float*)dst)[idx1] = r1;
+            }
         }
     }
     return 0;
