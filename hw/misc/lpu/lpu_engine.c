@@ -14,6 +14,10 @@
 #include "lpu_spec.h"
 #include "../npu/npu_compute.h"
 
+#ifndef LPU_GEMM_FLAG_HAS_BIAS
+#define LPU_GEMM_FLAG_HAS_BIAS (1 << 3)
+#endif
+
 #include <string.h>
 #include <math.h>
 
