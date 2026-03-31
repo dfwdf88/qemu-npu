@@ -1811,24 +1811,51 @@ int npu_compute_rmsnorm(const void* src, const void* weight, void* dst,
     if (!src || !dst)
         return -1;
 
-    const float *sf = (const float *)src;
-    const float *wf = (const float *)weight;
-    float *df = (float *)dst;
+    int fp16 = (flags & NPU_COMPUTE_FLAG_FP16) != 0;
 
-    for (b = 0; b < batch_size; b++) {
-        const float *row = &sf[b * normalized_shape];
-        float *out = &df[b * normalized_shape];
+    if (fp16) {
+        const uint16_t *sh = (const uint16_t *)src;
+        const uint16_t *wh = (const uint16_t *)weight;
+        uint16_t *dh = (uint16_t *)dst;
 
-        float sum_sq = 0.0f;
-        for (i = 0; i < normalized_shape; i++)
-            sum_sq += row[i] * row[i];
-        float rms = sqrtf(sum_sq / normalized_shape + epsilon);
+        for (b = 0; b < batch_size; b++) {
+            const uint16_t *row = &sh[b * normalized_shape];
+            uint16_t *out = &dh[b * normalized_shape];
 
-        for (i = 0; i < normalized_shape; i++) {
-            float val = row[i] / rms;
-            if (wf)
-                val *= wf[i];
-            out[i] = val;
+            float sum_sq = 0.0f;
+            for (i = 0; i < normalized_shape; i++) {
+                float v = npu_fp16_to_fp32(row[i]);
+                sum_sq += v * v;
+            }
+            float rms = sqrtf(sum_sq / normalized_shape + epsilon);
+
+            for (i = 0; i < normalized_shape; i++) {
+                float val = npu_fp16_to_fp32(row[i]) / rms;
+                if (wh)
+                    val *= npu_fp16_to_fp32(wh[i]);
+                out[i] = npu_fp32_to_fp16(val);
+            }
+        }
+    } else {
+        const float *sf = (const float *)src;
+        const float *wf = (const float *)weight;
+        float *df = (float *)dst;
+
+        for (b = 0; b < batch_size; b++) {
+            const float *row = &sf[b * normalized_shape];
+            float *out = &df[b * normalized_shape];
+
+            float sum_sq = 0.0f;
+            for (i = 0; i < normalized_shape; i++)
+                sum_sq += row[i] * row[i];
+            float rms = sqrtf(sum_sq / normalized_shape + epsilon);
+
+            for (i = 0; i < normalized_shape; i++) {
+                float val = row[i] / rms;
+                if (wf)
+                    val *= wf[i];
+                out[i] = val;
+            }
         }
     }
     return 0;
