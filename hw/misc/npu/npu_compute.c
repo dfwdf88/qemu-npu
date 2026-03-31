@@ -2337,6 +2337,7 @@ int npu_compute_kv_cache_attention(const void* Q, const void* k_cache,
         return -2;
 
     gqa_ratio = num_heads / num_kv_heads;
+    int fp16 = (flags & NPU_COMPUTE_FLAG_FP16) != 0;
 
     /* For each query head */
     for (h = 0; h < num_heads; h++) {
@@ -2352,9 +2353,13 @@ int npu_compute_kv_cache_attention(const void* Q, const void* k_cache,
         for (s = 0; s < cur_seq_len; s++) {
             score = 0.0f;
             for (d = 0; d < (uint32_t)head_dim; d++) {
-                float q_val = npu_fp16_to_fp32(((const uint16_t*)Q)[h * head_dim + d]);
+                float q_val = fp16
+                    ? npu_fp16_to_fp32(((const uint16_t*)Q)[h * head_dim + d])
+                    : ((const float*)Q)[h * head_dim + d];
                 uint32_t k_idx = (kv_h * max_seq_len + s) * head_dim + d;
-                float k_val = npu_fp16_to_fp32(((const uint16_t*)k_cache)[k_idx]);
+                float k_val = fp16
+                    ? npu_fp16_to_fp32(((const uint16_t*)k_cache)[k_idx])
+                    : ((const float*)k_cache)[k_idx];
                 score += q_val * k_val;
             }
             score *= scale;
@@ -2377,10 +2382,15 @@ int npu_compute_kv_cache_attention(const void* Q, const void* k_cache,
             float val = 0.0f;
             for (s = 0; s < cur_seq_len; s++) {
                 uint32_t v_idx = (kv_h * max_seq_len + s) * head_dim + d;
-                float v_val = npu_fp16_to_fp32(((const uint16_t*)v_cache)[v_idx]);
+                float v_val = fp16
+                    ? npu_fp16_to_fp32(((const uint16_t*)v_cache)[v_idx])
+                    : ((const float*)v_cache)[v_idx];
                 val += scores[s] * v_val;
             }
-            ((uint16_t*)dst)[h * head_dim + d] = npu_fp32_to_fp16(val);
+            if (fp16)
+                ((uint16_t*)dst)[h * head_dim + d] = npu_fp32_to_fp16(val);
+            else
+                ((float*)dst)[h * head_dim + d] = val;
         }
         free(scores);
     }
@@ -2395,7 +2405,8 @@ int npu_compute_kv_cache_reset(void* k_cache, void* v_cache,
         return -1;
 
     if (flags & 0x01) {  /* zero_memory flag */
-        uint32_t total = num_kv_heads * max_seq_len * head_dim * 2;  /* fp16 */
+        /* elem_size determined by caller (handler knows fp16/fp32 from instruction flags) */
+        uint32_t total = num_kv_heads * max_seq_len * head_dim * 2;  /* fp16 default for NPU */
         memset(k_cache, 0, total);
         memset(v_cache, 0, total);
     }

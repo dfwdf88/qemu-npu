@@ -403,7 +403,8 @@ static int handle_kv_cache_attention(lpu_exec_ctx_t *ctx)
 static int handle_kv_cache_reset(lpu_exec_ctx_t *ctx)
 {
     const lpu_inst_kv_cache_reset_t *inst = &ctx->inst->kv_cache_reset;
-    uint32_t cache_bytes = inst->num_kv_heads * inst->max_seq_len * inst->head_dim * 2;
+    uint32_t elem_size = (inst->flags & NPU_COMPUTE_FLAG_FP16) ? 2 : 4;
+    uint32_t cache_bytes = inst->num_kv_heads * inst->max_seq_len * inst->head_dim * elem_size;
 
     if (!sram_bounds_ok(inst->k_cache_addr, cache_bytes))
         return -1;
